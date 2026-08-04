@@ -43,6 +43,21 @@ CropRect resolveCrop(const CropRect& c, int w, int h) {
     return r;
 }
 
+// 偶数对齐 + 边界裁剪, 保证与 VMAF 初始化尺寸严格一致
+CropRect normalizeCrop(CropRect r, int w, int h) {
+    r.x &= ~1;
+    r.y &= ~1;
+    r.w &= ~1;
+    r.h &= ~1;
+    if (r.x < 0) r.x = 0;
+    if (r.y < 0) r.y = 0;
+    if (r.x > w - 2) r.x = (w - 2) & ~1;
+    if (r.y > h - 2) r.y = (h - 2) & ~1;
+    r.w = std::min(r.w, w - r.x) & ~1;
+    r.h = std::min(r.h, h - r.y) & ~1;
+    return r;
+}
+
 } // namespace
 
 void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
@@ -92,23 +107,31 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
 
     // ---------- 对齐 ----------
     int refStart = 0, distStart = 0;
-    if (cfg.alignMode == AlignMode::GreenScreen) {
+    bool hasGreenAnchor = false;
+    {
+        // 两种模式都先尝试绿屏锚点: 内容模式遇到绿屏视频时,
+        // 直接做 NCC 粗对齐会因绿屏帧完全相同而任意错位
         const int rAnchor = FrameAligner::detectGreenTransition(scanRef);
         const int dAnchor = FrameAligner::detectGreenTransition(scanDist);
-        if (rAnchor < 0 || dAnchor < 0) {
-            log(cb, "warn", "未检测到绿屏段, 退化为内容自动匹配");
-            const int off = FrameAligner::coarseOffset(scanRef, scanDist, cfg.alignOpt);
-            distStart = std::max(0, off);
-        } else {
+        hasGreenAnchor = (rAnchor >= 0 && dAnchor >= 0);
+        if (hasGreenAnchor) {
             refStart = rAnchor;
             distStart = dAnchor;
             log(cb, "info", "绿屏锚点: 参考帧 " + std::to_string(rAnchor) + ", 目标帧 " +
-                                std::to_string(dAnchor));
+                                std::to_string(dAnchor) +
+                                (cfg.alignMode == AlignMode::Content ? " (内容模式自动启用)" : ""));
         }
-    } else if (cfg.alignMode == AlignMode::Content) {
+    }
+    if (cfg.alignMode == AlignMode::GreenScreen && !hasGreenAnchor) {
+        log(cb, "warn", "未检测到绿屏段, 退化为内容自动匹配");
+        const int off = FrameAligner::coarseOffset(scanRef, scanDist, cfg.alignOpt);
+        distStart = std::max(0, off);
+    } else if (cfg.alignMode == AlignMode::Content && !hasGreenAnchor) {
         const int off = FrameAligner::coarseOffset(scanRef, scanDist, cfg.alignOpt);
         distStart = std::max(0, off);
         log(cb, "info", "内容粗对齐偏移: " + std::to_string(distStart) + " 帧");
+    } else if (cfg.alignMode == AlignMode::None && !hasGreenAnchor) {
+        // 不对齐
     }
 
     FrameMapping mapping =
@@ -125,14 +148,21 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
                         std::to_string(mapping.freezeCount));
 
     if (matched == 0) {
-        summary.error = "没有匹配到任何帧对, 无法评估";
+        summary.error = "没有匹配到任何帧对, 无法评估 (两端内容差异过大, 或对齐模式不合适)";
         if (cb.onFinished) cb.onFinished(summary);
         return;
     }
 
-    // ---------- 裁剪参数 ----------
-    const CropRect rc = resolveCrop(cfg.refCrop, scanRef.width, scanRef.height);
-    const CropRect dc = resolveCrop(cfg.distCrop, scanDist.width, scanDist.height);
+    // ---------- 裁剪参数 (规范化: 偶数对齐 + 边界裁剪) ----------
+    const CropRect rc = normalizeCrop(resolveCrop(cfg.refCrop, scanRef.width, scanRef.height),
+                                      scanRef.width, scanRef.height);
+    const CropRect dc = normalizeCrop(resolveCrop(cfg.distCrop, scanDist.width, scanDist.height),
+                                      scanDist.width, scanDist.height);
+    if (rc.w <= 0 || rc.h <= 0 || dc.w <= 0 || dc.h <= 0) {
+        summary.error = "裁剪区域无效 (超出画面范围), 请重新框选";
+        if (cb.onFinished) cb.onFinished(summary);
+        return;
+    }
     log(cb, "info", "裁剪: 参考 " + std::to_string(rc.w) + "x" + std::to_string(rc.h) + " @(" +
                         std::to_string(rc.x) + "," + std::to_string(rc.y) + "), 目标 " +
                         std::to_string(dc.w) + "x" + std::to_string(dc.h) + " @(" +

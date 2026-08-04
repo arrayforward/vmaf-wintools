@@ -247,9 +247,10 @@ void EvalTab::loadFirstFrames() {
         vt::Frame f;
         QImage img;
         if (reader->readFrame(f)) {
+            // 用原始分辨率图像, 保证框选坐标 = 原始像素坐标
             std::vector<uint8_t> rgb;
             int w, h;
-            if (vt::frameToRgbThumb(f, rgb, w, h, 960))
+            if (vt::frameToRgbThumb(f, rgb, w, h, 4096))
                 img = QImage(rgb.data(), w, h, w * 3, QImage::Format_RGB888).copy();
         }
         reader->close();

@@ -6,9 +6,39 @@
 #include <QCoreApplication>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+// Windows 下命令行参数为本地代码页 (GBK), 转成 UTF-8 供 FFmpeg 打开中文路径
+static std::vector<std::string> g_utf8Args;
+static std::vector<char*> g_argvPtrs;
+
+static void convertWinArgs(int& argc, char**& argv) {
+#ifdef _WIN32
+    int wargc = 0;
+    LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (!wargv) return;
+    g_utf8Args.clear();
+    for (int i = 0; i < wargc; ++i) {
+        int len = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, nullptr, 0, nullptr, nullptr);
+        std::string s(len ? len - 1 : 0, '\0');
+        if (len > 1)
+            WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, s.data(), len, nullptr, nullptr);
+        g_utf8Args.push_back(std::move(s));
+    }
+    LocalFree(wargv);
+    g_argvPtrs.clear();
+    for (auto& s : g_utf8Args) g_argvPtrs.push_back(s.data());
+    argc = wargc;
+    argv = g_argvPtrs.data();
+#else
+    (void)argc;
+    (void)argv;
+#endif
+}
 
 static int runCli(int argc, char* argv[]) {
     // vmaf_tool --cli <ref> <dist> [--model name_or_path] [--align none|green|content]
@@ -67,6 +97,7 @@ static int runCli(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
+    convertWinArgs(argc, argv);
     if (argc > 1 && strcmp(argv[1], "--cli") == 0) {
         QCoreApplication app(argc, argv);
         return runCli(argc, argv);
