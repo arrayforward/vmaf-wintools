@@ -70,8 +70,9 @@ target_link_libraries(vmaf_tool PRIVATE
 )
 
 # ---- 运行时文件拷贝 ----
-# FFmpeg DLL
+# FFmpeg DLL 与可执行文件 (ffmpeg/ffprobe 供预处理 Tab 内置使用)
 file(GLOB FFMPEG_DLLS "${FFMPEG_ROOT}/bin/*.dll")
+file(GLOB FFMPEG_EXES "${FFMPEG_ROOT}/bin/ffmpeg.exe" "${FFMPEG_ROOT}/bin/ffprobe.exe")
 # libvmaf DLL 及 MinGW 运行时 (libvmaf 由 MinGW 编译)
 file(GLOB LIBVMAF_DLLS "${LIBVMAF_ROOT}/bin/*.dll")
 set(MINGW_BIN "" CACHE PATH "MinGW bin 目录 (含 libgcc_s_seh-1.dll 等)")
@@ -82,6 +83,7 @@ endif()
 
 add_custom_command(TARGET vmaf_tool POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} $<TARGET_FILE_DIR:vmaf_tool>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_EXES} $<TARGET_FILE_DIR:vmaf_tool>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBVMAF_DLLS} $<TARGET_FILE_DIR:vmaf_tool>
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/models
             $<TARGET_FILE_DIR:vmaf_tool>/models

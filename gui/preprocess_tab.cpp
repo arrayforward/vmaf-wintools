@@ -2,6 +2,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -100,8 +101,10 @@ PreprocessTab::PreprocessTab(QWidget* parent) : QWidget(parent) {
 }
 
 QString PreprocessTab::findFfmpeg() const {
-    const QString path = QStandardPaths::findExecutable("ffmpeg");
-    return path;
+    // 优先使用 exe 同目录内置的 ffmpeg
+    const QString bundled = QCoreApplication::applicationDirPath() + "/ffmpeg.exe";
+    if (QFileInfo::exists(bundled)) return bundled;
+    return QStandardPaths::findExecutable("ffmpeg");
 }
 
 void PreprocessTab::browseInput() {
