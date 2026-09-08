@@ -207,8 +207,7 @@ void EvalTab::startEval() {
     st.setValue("lastDist", distEdit_->text());
 
     chart_->clear();
-    entries_.clear();
-    sampleCount_ = 0;
+    chartToFinal_.clear();
     hasSummary_ = false;
     resultLabel_->setText(tr("评估中…"));
     appendLog("info", tr("开始评估"));
@@ -217,7 +216,6 @@ void EvalTab::startEval() {
     worker_->configure(cfg);
     connect(worker_, &EvalWorker::logMessage, this, &EvalTab::onLog);
     connect(worker_, &EvalWorker::progressChanged, this, &EvalTab::onProgress);
-    connect(worker_, &EvalWorker::frameReady, this, &EvalTab::onFrame);
     connect(worker_, &EvalWorker::evalFinished, this, &EvalTab::onFinished);
     setRunning(true);
     worker_->start();
@@ -236,47 +234,26 @@ void EvalTab::onProgress(int done, int total) {
     progress_->setFormat(tr("%1/%2 帧 (%p%)").arg(done).arg(total));
 }
 
-void EvalTab::onFrame(int /*idx*/, int refIdx, int distIdx, bool dropped, bool scoreValid,
-                      double score, const QImage& /*refThumb*/, const QImage& /*distThumb*/) {
-    // 以参考帧号为 key 更新/新增条目
-    int pos = -1;
-    for (int i = entries_.size() - 1; i >= 0 && i > entries_.size() - 6; --i) {
-        if (entries_[i].refIdx == refIdx) {
-            pos = i;
-            break;
-        }
-    }
-    if (pos < 0) {
-        FrameEntry e;
-        e.refIdx = refIdx;
-        e.distIdx = distIdx;
-        e.dropped = dropped;
-        entries_.append(e);
-        pos = entries_.size() - 1;
-        // 丢帧不进图表; 有效样本以 -1 占位进图表 (分数延迟一帧回填)
-        if (!dropped) {
-            const int frameNo = samplingMode_ ? ++sampleCount_ : refIdx;
-            entries_[pos].chartIdx = chart_->frameCount();
-            chart_->appendFrame(-1, frameNo);
-        }
-    }
-    auto& e = entries_[pos];
-    e.dropped = dropped;
-    e.distIdx = distIdx;
-    if (scoreValid) {
-        e.score = score;
-        if (e.chartIdx >= 0) chart_->updateFrame(e.chartIdx, score);
-        appendLog("info", tr("帧 %1 VMAF=%2").arg(refIdx).arg(score, 0, 'f', 2));
-    }
-}
-
 void EvalTab::onFinished(bool ok, const QString& error, double mean, double harmonic, double minS,
                          double maxS, int matched, int dropped, int frozen,
                          int markerUnrecognized, double markerCoverage, int freezeSegments,
-                         int freezeMaxLen) {
+                         int freezeMaxLen, const QVector<EvalFrameEntry>& frames) {
     setRunning(false);
     if (ok) {
         hasSummary_ = true;
+        finalFrames_ = frames;
+        // 供导出 summary 段使用
+        lastSummary_.mean = mean;
+        lastSummary_.harmonicMean = harmonic;
+        lastSummary_.minScore = minS;
+        lastSummary_.maxScore = maxS;
+        lastSummary_.matched = matched;
+        lastSummary_.dropped = dropped;
+        lastSummary_.frozen = frozen;
+        lastSummary_.markerUnrecognized = markerUnrecognized;
+        lastSummary_.markerCoverage = markerCoverage;
+        lastSummary_.freezeSegments = freezeSegments;
+        lastSummary_.freezeMaxLen = freezeMaxLen;
         const double dropRate = matched + dropped > 0
                                     ? 100.0 * dropped / (matched + dropped)
                                     : 0.0;
@@ -298,6 +275,19 @@ void EvalTab::onFinished(bool ok, const QString& error, double mean, double harm
                         .arg(freezeMaxLen);
         }
         resultLabel_->setText(text);
+
+        // 图表在评测结束时从全量结果重建 (该 libvmaf 构建 flush 前不可取分,
+        // 过程中没有分数可画): 只画 scoreValid 的有效样本, 折线连接相邻样本
+        chart_->clear();
+        chartToFinal_.clear();
+        int sampleNo = 0;
+        for (int i = 0; i < finalFrames_.size(); ++i) {
+            const auto& e = finalFrames_[i];
+            if (e.dropped || !e.scoreValid) continue;
+            chartToFinal_.append(i);
+            chart_->appendFrame(e.score, samplingMode_ ? ++sampleNo : e.refIdx);
+        }
+
         exportJsonBtn_->setEnabled(true);
         exportCsvBtn_->setEnabled(true);
     } else {
@@ -312,33 +302,48 @@ void EvalTab::onFinished(bool ok, const QString& error, double mean, double harm
 }
 
 void EvalTab::onChartFrameSelected(int idx) {
-    // idx 为图表样本序号, 找到对应条目
-    for (const auto& e : entries_) {
-        if (e.chartIdx != idx) continue;
-        appendLog("info", tr("查看帧 %1 → 目标帧 %2, VMAF=%3")
-                              .arg(e.refIdx)
-                              .arg(e.distIdx)
-                              .arg(e.score, 0, 'f', 2));
-        return;
-    }
+    // idx 为图表样本序号, 经 chartToFinal_ 反查 finalFrames_
+    if (idx < 0 || idx >= chartToFinal_.size()) return;
+    const auto& e = finalFrames_[chartToFinal_[idx]];
+    appendLog("info", tr("查看帧 %1 → 目标帧 %2, VMAF=%3")
+                          .arg(e.refIdx)
+                          .arg(e.distIdx)
+                          .arg(e.score, 0, 'f', 2));
 }
 
 void EvalTab::exportJson() {
     const QString f = QFileDialog::getSaveFileName(this, tr("导出 JSON"), "vmaf_result.json",
                                                    "JSON (*.json)");
     if (f.isEmpty()) return;
+    // 数据源是评测完成时的 Summary.frames 全量 (含 flush 后补齐的分数),
+    // 采样模式下只含匹配上的样本
     QJsonArray frames;
-    for (const auto& e : entries_) {
+    for (const auto& e : finalFrames_) {
         QJsonObject o;
         o["ref_frame"] = e.refIdx;
-        o["dist_frame"] = e.distIdx;
-        o["dropped"] = e.dropped;
-        if (!e.dropped && e.score >= 0) o["vmaf"] = e.score;
+        o["status"] = e.dropped ? "dropped" : "matched";
+        if (!e.dropped) {
+            o["dist_frame"] = e.distIdx;
+            if (e.scoreValid) o["vmaf"] = e.score;
+        }
         frames.append(o);
     }
+    QJsonObject sum;
+    sum["mean"] = lastSummary_.mean;
+    sum["harmonic_mean"] = lastSummary_.harmonicMean;
+    sum["min"] = lastSummary_.minScore;
+    sum["max"] = lastSummary_.maxScore;
+    sum["matched"] = lastSummary_.matched;
+    sum["dropped"] = lastSummary_.dropped;
+    sum["frozen"] = lastSummary_.frozen;
+    sum["freeze_segments"] = lastSummary_.freezeSegments;
+    sum["freeze_max_len"] = lastSummary_.freezeMaxLen;
+    sum["marker_unrecognized"] = lastSummary_.markerUnrecognized;
+    sum["marker_coverage"] = lastSummary_.markerCoverage;
     QJsonObject root;
     root["reference"] = refPath_;
     root["distorted"] = distEdit_->text();
+    root["summary"] = sum;
     root["frames"] = frames;
     QFile file(f);
     if (file.open(QIODevice::WriteOnly)) file.write(QJsonDocument(root).toJson());
@@ -351,10 +356,12 @@ void EvalTab::exportCsv() {
     QFile file(f);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
     QTextStream ts(&file);
-    ts << "ref_frame,dist_frame,status,vmaf\n";
-    for (const auto& e : entries_) {
-        ts << e.refIdx << ',' << e.distIdx << ',' << (e.dropped ? "dropped" : "matched") << ',';
-        if (!e.dropped && e.score >= 0) ts << QString::number(e.score, 'f', 4);
-        ts << '\n';
+    ts << "ref_frame,dist_frame,vmaf,status\n";
+    for (const auto& e : finalFrames_) {
+        ts << e.refIdx << ',';
+        if (!e.dropped) ts << e.distIdx;
+        ts << ',';
+        if (!e.dropped && e.scoreValid) ts << QString::number(e.score, 'f', 4);
+        ts << ',' << (e.dropped ? "dropped" : "matched") << '\n';
     }
 }

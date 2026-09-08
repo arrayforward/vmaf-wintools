@@ -2,6 +2,8 @@
 
 #include "../core/pipeline.h"
 
+#include "worker.h" // EvalFrameEntry
+
 #include <QHash>
 #include <QWidget>
 
@@ -13,7 +15,6 @@ class QProgressBar;
 class QPlainTextEdit;
 class QLabel;
 class VmafChartWidget;
-class EvalWorker;
 
 class EvalTab : public QWidget {
     Q_OBJECT
@@ -34,11 +35,10 @@ private slots:
 
     void onLog(const QString& level, const QString& msg);
     void onProgress(int done, int total);
-    void onFrame(int idx, int refIdx, int distIdx, bool dropped, bool scoreValid, double score,
-                 const QImage& refThumb, const QImage& distThumb);
     void onFinished(bool ok, const QString& error, double mean, double harmonic, double minS,
                     double maxS, int matched, int dropped, int frozen, int markerUnrecognized,
-                    double markerCoverage, int freezeSegments, int freezeMaxLen);
+                    double markerCoverage, int freezeSegments, int freezeMaxLen,
+                    const QVector<EvalFrameEntry>& frames);
     void onChartFrameSelected(int idx);
 
 private:
@@ -64,15 +64,8 @@ private:
 
     EvalWorker* worker_ = nullptr;
 
-    // 帧回看缓存 (按 chart 帧号索引)
-    struct FrameEntry {
-        int refIdx = -1, distIdx = -1;
-        bool dropped = false;
-        double score = -1;
-        int chartIdx = -1; // 在图表中的样本序号, -1 = 未进图表 (丢帧)
-    };
-    QVector<FrameEntry> entries_;
-    int sampleCount_ = 0; // 采样模式: 有效样本计数 (图表 x 轴)
+    QVector<EvalFrameEntry> finalFrames_; // 评测完成时的全量逐帧结果 (含 flush 补齐分数), 供导出/图表
+    QVector<int> chartToFinal_;         // 图表样本序号 -> finalFrames_ 下标 (点击回查)
     bool samplingMode_ = false;
     vt::Summary lastSummary_;
     bool hasSummary_ = false;

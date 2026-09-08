@@ -1,7 +1,7 @@
 // eval_cli: 命令行 VMAF 画质评测 (帧号对齐 + 自动裁剪)
 //
 // 用法:
-//   eval_cli <ref视频> <dist视频或截图文件夹> [model路径]
+//   eval_cli <ref视频> <dist视频或截图文件夹> [model路径] [--export-json 文件] [--export-csv 文件]
 //   model 默认 <exe目录>/models/vmaf_v0.6.1.json
 // 退出码: 评估成功 0, 失败 1
 
@@ -38,20 +38,93 @@ bool fileExists(const std::string& p) {
     return false;
 }
 
+// JSON 字符串转义 (路径含反斜杠)
+std::string jsonEscape(const std::string& s) {
+    std::string out;
+    for (const char c : s) {
+        if (c == '\\' || c == '"') out += '\\';
+        out += c;
+    }
+    return out;
+}
+
+// 导出逐帧结果 (Summary.frames 全量, 含 flush 后补齐的分数)
+// JSON: {reference, distorted, summary{...}, frames[{ref_frame, dist_frame, vmaf, status}]}
+bool exportJson(const std::string& path, const vt::PipelineConfig& cfg, const vt::Summary& s) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return false;
+    fprintf(f, "{\n");
+    fprintf(f, "  \"reference\": \"%s\",\n  \"distorted\": \"%s\",\n",
+            jsonEscape(cfg.refPath).c_str(), jsonEscape(cfg.distPath).c_str());
+    fprintf(f,
+            "  \"summary\": {\"mean\": %.4f, \"harmonic_mean\": %.4f, \"min\": %.4f, "
+            "\"max\": %.4f, \"matched\": %d, \"dropped\": %d, \"frozen\": %d, "
+            "\"freeze_segments\": %d, \"freeze_max_len\": %d, \"marker_unrecognized\": %d, "
+            "\"marker_coverage\": %.4f},\n",
+            s.mean, s.harmonicMean, s.minScore, s.maxScore, s.matched, s.dropped, s.frozen,
+            s.freezeSegments, s.freezeMaxLen, s.markerUnrecognized, s.markerCoverage);
+    fprintf(f, "  \"frames\": [\n");
+    for (size_t i = 0; i < s.frames.size(); ++i) {
+        const auto& fr = s.frames[i];
+        fprintf(f, "    {\"ref_frame\": %d, ", fr.refIdx);
+        if (fr.dropped) {
+            fprintf(f, "\"status\": \"dropped\"}");
+        } else {
+            fprintf(f, "\"dist_frame\": %d, ", fr.distIdx);
+            if (fr.scoreValid) fprintf(f, "\"vmaf\": %.4f, ", fr.score);
+            fprintf(f, "\"status\": \"matched\"}");
+        }
+        fprintf(f, "%s\n", i + 1 < s.frames.size() ? "," : "");
+    }
+    fprintf(f, "  ]\n}\n");
+    fclose(f);
+    return true;
+}
+
+// CSV 列: ref_frame,dist_frame,vmaf,status
+bool exportCsv(const std::string& path, const vt::Summary& s) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return false;
+    fprintf(f, "ref_frame,dist_frame,vmaf,status\n");
+    for (const auto& fr : s.frames) {
+        fprintf(f, "%d,", fr.refIdx);
+        if (!fr.dropped) fprintf(f, "%d", fr.distIdx);
+        fprintf(f, ",");
+        if (!fr.dropped && fr.scoreValid) fprintf(f, "%.4f", fr.score);
+        fprintf(f, ",%s\n", fr.dropped ? "dropped" : "matched");
+    }
+    fclose(f);
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "用法: %s <ref视频> <dist视频或截图文件夹> [model路径]\n", argv[0]);
+        fprintf(stderr,
+                "用法: %s <ref视频> <dist视频或截图文件夹> [model路径] "
+                "[--export-json 文件] [--export-csv 文件]\n",
+                argv[0]);
         return 2;
     }
 
     vt::PipelineConfig cfg;
     cfg.refPath = argv[1];
     cfg.distPath = argv[2];
-    if (argc > 3) {
-        cfg.vmaf.modelName = argv[3];
-    } else {
+    std::string exportJsonPath, exportCsvPath;
+    bool modelGiven = false;
+    for (int i = 3; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--export-json" && i + 1 < argc) {
+            exportJsonPath = argv[++i];
+        } else if (a == "--export-csv" && i + 1 < argc) {
+            exportCsvPath = argv[++i];
+        } else {
+            cfg.vmaf.modelName = a; // 位置参数: model 路径
+            modelGiven = true;
+        }
+    }
+    if (!modelGiven) {
         const std::string def = exeDir() + "/models/vmaf_v0.6.1.json";
         if (fileExists(def)) cfg.vmaf.modelName = def;
     }
@@ -61,6 +134,9 @@ int main(int argc, char** argv) {
     vt::PipelineCallbacks cb;
     cb.onLog = [](const std::string& level, const std::string& msg) {
         printf("[%s] %s\n", level.c_str(), msg.c_str());
+    };
+    cb.onFrame = [](const vt::FrameResult& fr) {
+        if (fr.scoreValid) printf("帧 %d VMAF=%.4f\n", fr.refIdx, fr.score);
     };
     cb.onFinished = [&](const vt::Summary& s) { summary = s; };
 
@@ -76,5 +152,18 @@ int main(int argc, char** argv) {
            summary.dropped, summary.frozen, summary.freezeSegments, summary.freezeMaxLen);
     printf("帧号: 未识别 %d 帧, 参考覆盖率 %.1f%%\n", summary.markerUnrecognized,
            summary.markerCoverage * 100.0);
+
+    if (summary.ok && !exportJsonPath.empty()) {
+        if (exportJson(exportJsonPath, cfg, summary))
+            printf("已导出 JSON: %s (%zu 帧)\n", exportJsonPath.c_str(), summary.frames.size());
+        else
+            printf("错误: 无法写 %s\n", exportJsonPath.c_str());
+    }
+    if (summary.ok && !exportCsvPath.empty()) {
+        if (exportCsv(exportCsvPath, summary))
+            printf("已导出 CSV: %s (%zu 帧)\n", exportCsvPath.c_str(), summary.frames.size());
+        else
+            printf("错误: 无法写 %s\n", exportCsvPath.c_str());
+    }
     return summary.ok ? 0 : 1;
 }

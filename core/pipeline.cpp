@@ -397,6 +397,19 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
         fr.refIdx = r + mapping.refStart;
         fr.distIdx = dIdx;
 
+        // 目标帧号乱序 (采集乱序/抖动): 顺序 reader 回退不了, 重开目标输入回读
+        // (marker 映射 distStart 恒为 0; 采样序列通常很小, 重开代价可接受)
+        if (dIdx < distWanted) {
+            log(cb, "warn", "目标帧 " + std::to_string(dIdx) + " 乱序, 重开目标输入回读");
+            distReader->close();
+            distReader = createReader(cfg.distPath, cfg.yuvDistSize, cfg.yuvFps, err);
+            if (!distReader || !distReader->open(err)) {
+                summary.error = "目标视频: " + err;
+                break;
+            }
+            distWanted = mapping.distStart;
+        }
+
         // 顺序解码目标到 dIdx
         bool gotDist = false;
         while (distWanted <= dIdx) {
@@ -408,6 +421,7 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
             ++distWanted;
         }
         if (!gotDist) {
+            if (distSampling) continue; // 采样序列取不到该帧, 视为未采样
             fr.dropped = true;
             summary.frames.push_back(fr);
             if (cb.onFrame) cb.onFrame(fr);
