@@ -26,6 +26,7 @@ std::unique_ptr<VideoReader> createFFmpegReader(const std::string& path);
 std::unique_ptr<VideoReader> createYuvReader(const std::string& path, int w, int h, double fps);
 
 // 根据扩展名选择读取器 (.yuv 走 YuvReader, 需要 wh 形如 "1920x1080")
+// 也支持 image2 序列模式 (shot_%05d.png) 和截图文件夹 (自动推导模式, 按 1fps 读取)
 std::unique_ptr<VideoReader> createReader(const std::string& path, const std::string& yuvSize,
                                           double yuvFps, std::string& err);
 

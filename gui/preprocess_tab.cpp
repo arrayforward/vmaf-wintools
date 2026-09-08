@@ -6,6 +6,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -74,6 +75,35 @@ PreprocessTab::PreprocessTab(QWidget* parent) : QWidget(parent) {
 
     layout->addLayout(form);
 
+    // ---- 生成帧号片源 (烧录 QR 帧号, 供评测端精确对齐) ----
+    auto* markerGroup = new QGroupBox(tr("生成帧号片源 (逐帧烧录 QR 帧号)"));
+    auto* markerForm = new QFormLayout(markerGroup);
+    auto* mInRow = new QHBoxLayout;
+    markerInputEdit_ = new QLineEdit;
+    auto* mInBtn = new QPushButton(tr("浏览…"));
+    mInRow->addWidget(markerInputEdit_);
+    mInRow->addWidget(mInBtn);
+    markerForm->addRow(tr("输入视频:"), mInRow);
+
+    auto* mOutRow = new QHBoxLayout;
+    markerOutputEdit_ = new QLineEdit;
+    auto* mOutBtn = new QPushButton(tr("浏览…"));
+    mOutRow->addWidget(markerOutputEdit_);
+    mOutRow->addWidget(mOutBtn);
+    markerForm->addRow(tr("输出文件:"), mOutRow);
+
+    auto* mCrfRow = new QHBoxLayout;
+    markerCrfSpin_ = new QSpinBox;
+    markerCrfSpin_->setRange(0, 51);
+    markerCrfSpin_->setValue(14);
+    markerStartBtn_ = new QPushButton(tr("开始生成"));
+    mCrfRow->addWidget(new QLabel(tr("CRF (越小越清晰):")));
+    mCrfRow->addWidget(markerCrfSpin_);
+    mCrfRow->addWidget(markerStartBtn_);
+    mCrfRow->addStretch();
+    markerForm->addRow(mCrfRow);
+    layout->addWidget(markerGroup);
+
     auto* btnRow = new QHBoxLayout;
     startBtn_ = new QPushButton(tr("开始处理"));
     cancelBtn_ = new QPushButton(tr("取消"));
@@ -98,6 +128,25 @@ PreprocessTab::PreprocessTab(QWidget* parent) : QWidget(parent) {
     });
     connect(startBtn_, &QPushButton::clicked, this, &PreprocessTab::startProcess);
     connect(cancelBtn_, &QPushButton::clicked, this, &PreprocessTab::cancelProcess);
+
+    connect(mInBtn, &QPushButton::clicked, this, [this] {
+        const QString f = QFileDialog::getOpenFileName(
+            this, tr("选择输入视频"), QString(),
+            tr("视频文件 (*.mp4 *.mkv *.avi *.mov *.flv);;所有文件 (*)"));
+        if (f.isEmpty()) return;
+        markerInputEdit_->setText(f);
+        if (markerOutputEdit_->text().isEmpty()) {
+            const QFileInfo fi(f);
+            markerOutputEdit_->setText(fi.absolutePath() + "/" + fi.completeBaseName() +
+                                       "_marked.mp4");
+        }
+    });
+    connect(mOutBtn, &QPushButton::clicked, this, [this] {
+        const QString f = QFileDialog::getSaveFileName(this, tr("输出文件"), QString(),
+                                                       tr("MP4 视频 (*.mp4)"));
+        if (!f.isEmpty()) markerOutputEdit_->setText(f);
+    });
+    connect(markerStartBtn_, &QPushButton::clicked, this, &PreprocessTab::startMarkerBurn);
 }
 
 QString PreprocessTab::findFfmpeg() const {
@@ -205,6 +254,7 @@ void PreprocessTab::startProcess() {
     connect(proc_, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
             [this](int code, QProcess::ExitStatus) { onProcFinished(code); });
     startBtn_->setEnabled(false);
+    markerStartBtn_->setEnabled(false);
     cancelBtn_->setEnabled(true);
     progress_->setValue(0);
     proc_->start(ffmpeg, args);
@@ -229,6 +279,7 @@ void PreprocessTab::onProcFinished(int exitCode) {
                             : tr("[错误] ffmpeg 退出码 %1").arg(exitCode));
     if (exitCode == 0) progress_->setValue(100);
     startBtn_->setEnabled(true);
+    markerStartBtn_->setEnabled(true);
     cancelBtn_->setEnabled(false);
     proc_->deleteLater();
     proc_ = nullptr;
@@ -236,4 +287,68 @@ void PreprocessTab::onProcFinished(int exitCode) {
 
 void PreprocessTab::cancelProcess() {
     if (proc_) proc_->kill();
+    if (markerProc_) markerProc_->kill();
+}
+
+// ---- 生成帧号片源 ----
+
+void PreprocessTab::startMarkerBurn() {
+    const QString input = markerInputEdit_->text();
+    const QString output = markerOutputEdit_->text();
+    if (input.isEmpty() || output.isEmpty()) {
+        appendLog(tr("[错误] 请选择输入视频和输出文件"));
+        return;
+    }
+    // marker_burn.exe 与本程序同目录构建
+    const QString tool = QCoreApplication::applicationDirPath() + "/marker_burn.exe";
+    if (!QFileInfo::exists(tool)) {
+        appendLog(tr("[错误] 找不到 marker_burn.exe (应位于程序同目录: %1), 请先构建").arg(tool));
+        return;
+    }
+
+    QStringList args;
+    args << input << output << "--crf" << QString::number(markerCrfSpin_->value());
+    appendLog(tr("[命令] marker_burn %1").arg(args.join(' ')));
+
+    markerTotal_ = 0;
+    markerProc_ = new QProcess(this);
+    markerProc_->setProcessChannelMode(QProcess::MergedChannels);
+    connect(markerProc_, &QProcess::readyReadStandardOutput, this,
+            &PreprocessTab::onMarkerOutput);
+    connect(markerProc_, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+            [this](int code, QProcess::ExitStatus) { onMarkerFinished(code); });
+    markerStartBtn_->setEnabled(false);
+    startBtn_->setEnabled(false);
+    cancelBtn_->setEnabled(true);
+    progress_->setValue(0);
+    markerProc_->start(tool, args);
+}
+
+void PreprocessTab::onMarkerOutput() {
+    // marker_burn 输出为 UTF-8 (/utf-8 编译), 日志与进度按 UTF-8 解码
+    const QString out = QString::fromUtf8(markerProc_->readAllStandardOutput());
+    static const QRegularExpression totalRe(QStringLiteral("总帧数 (\\d+)"));
+    static const QRegularExpression progRe(QStringLiteral("已处理 (\\d+) 帧"));
+    const auto tm = totalRe.match(out);
+    if (tm.hasMatch()) markerTotal_ = tm.captured(1).toLongLong();
+    // 一次可能读到多行进度, 取最后一行
+    auto it = progRe.globalMatch(out);
+    QRegularExpressionMatch pm;
+    while (it.hasNext()) pm = it.next();
+    if (pm.hasMatch() && markerTotal_ > 0)
+        progress_->setValue(qMin(100, static_cast<int>(pm.captured(1).toLongLong() * 100 /
+                                                      markerTotal_)));
+    for (const QString& line : out.split('\n', Qt::SkipEmptyParts))
+        appendLog(line.trimmed());
+}
+
+void PreprocessTab::onMarkerFinished(int exitCode) {
+    appendLog(exitCode == 0 ? tr("[完成] 帧号片源生成成功: %1").arg(markerOutputEdit_->text())
+                            : tr("[错误] marker_burn 退出码 %1").arg(exitCode));
+    if (exitCode == 0) progress_->setValue(100);
+    markerStartBtn_->setEnabled(true);
+    startBtn_->setEnabled(true);
+    cancelBtn_->setEnabled(false);
+    markerProc_->deleteLater();
+    markerProc_ = nullptr;
 }

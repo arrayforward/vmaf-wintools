@@ -6,7 +6,6 @@ extern "C" {
 }
 
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 
 namespace vt {
@@ -71,7 +70,7 @@ Frame scaleFrame(const Frame& src, int w, int h) {
     h &= ~1;
     out.alloc(w, h);
     SwsContext* sws = sws_getContext(src.width, src.height, AV_PIX_FMT_YUV420P, w, h,
-                                     AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
+                                     AV_PIX_FMT_YUV420P, SWS_BICUBIC, nullptr, nullptr, nullptr);
     if (!sws) return Frame{};
     const uint8_t* srcData[4] = {src.y.data(), src.u.data(), src.v.data(), nullptr};
     int srcStride[4] = {src.strideY, src.strideU, src.strideV, 0};
@@ -81,26 +80,6 @@ Frame scaleFrame(const Frame& src, int w, int h) {
     sws_freeContext(sws);
     out.ptsMs = src.ptsMs;
     return out;
-}
-
-bool isSolidColorFrame(const Frame& f, double stddevThresh) {
-    if (!f.valid()) return false;
-    // 采样计算亮度均值/方差
-    const int step = std::max(1, f.width / 64);
-    double sum = 0, sum2 = 0;
-    int64_t n = 0;
-    for (int r = 0; r < f.height; r += step) {
-        for (int c = 0; c < f.width; c += step) {
-            const double v = f.y[static_cast<size_t>(r) * f.strideY + c];
-            sum += v;
-            sum2 += v * v;
-            ++n;
-        }
-    }
-    if (n == 0) return false;
-    const double mean = sum / n;
-    const double var = sum2 / n - mean * mean;
-    return std::sqrt(std::max(0.0, var)) < stddevThresh;
 }
 
 } // namespace vt

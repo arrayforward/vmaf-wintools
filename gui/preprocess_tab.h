@@ -24,6 +24,9 @@ private slots:
     void cancelProcess();
     void onProcOutput();
     void onProcFinished(int exitCode);
+    void startMarkerBurn();
+    void onMarkerOutput();
+    void onMarkerFinished(int exitCode);
 
 private:
     QString findFfmpeg() const;
@@ -42,4 +45,12 @@ private:
     QPlainTextEdit* log_;
     QProcess* proc_ = nullptr;
     double durationSec_ = 0;
+
+    // 生成帧号片源 (调用同目录 marker_burn.exe)
+    QLineEdit* markerInputEdit_;
+    QLineEdit* markerOutputEdit_;
+    QSpinBox* markerCrfSpin_;
+    QPushButton* markerStartBtn_;
+    QProcess* markerProc_ = nullptr;
+    qint64 markerTotal_ = 0;
 };

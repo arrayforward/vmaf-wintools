@@ -1,8 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
-project(vmaf_tool LANGUAGES CXX)
+project(vmaf_tool LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(MSVC)
+    # 源码含中文注释 (UTF-8), 避免按系统代码页解析出错
+    add_compile_options(/utf-8)
+endif()
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
@@ -40,19 +45,31 @@ set(CORE_SOURCES
     core/vmaf_evaluator.h core/vmaf_evaluator.cpp
     core/frame_aligner.h core/frame_aligner.cpp
     core/pipeline.h core/pipeline.cpp
+    core/marker.h core/marker.cpp
+)
+
+# ---- third_party: 帧号 QR 标记 ----
+set(QRCODEGEN_SOURCES
+    third_party/qrcodegen/qrcodegen.cpp
+)
+set(QUIRC_SOURCES
+    third_party/quirc/decode.c
+    third_party/quirc/identify.c
+    third_party/quirc/quirc.c
+    third_party/quirc/version_db.c
 )
 
 set(GUI_SOURCES
     gui/main.cpp
     gui/main_window.h gui/main_window.cpp
     gui/eval_tab.h gui/eval_tab.cpp
+    gui/capture_tab.h gui/capture_tab.cpp
     gui/preprocess_tab.h gui/preprocess_tab.cpp
     gui/worker.h gui/worker.cpp
-    gui/crop_select_widget.h gui/crop_select_widget.cpp
     gui/vmaf_chart_widget.h gui/vmaf_chart_widget.cpp
 )
 
-add_executable(vmaf_tool WIN32 ${CORE_SOURCES} ${GUI_SOURCES})
+add_executable(vmaf_tool WIN32 ${CORE_SOURCES} ${GUI_SOURCES} ${QRCODEGEN_SOURCES} ${QUIRC_SOURCES})
 
 target_include_directories(vmaf_tool PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -99,3 +116,74 @@ if(WINDEPLOYQT)
     add_custom_command(TARGET vmaf_tool POST_BUILD
         COMMAND ${WINDEPLOYQT} --no-translations $<TARGET_FILE:vmaf_tool>)
 endif()
+
+# ---- 测试 ----
+add_executable(marker_test
+    tests/marker_test.cpp
+    core/frame.cpp core/marker.cpp
+    ${QRCODEGEN_SOURCES} ${QUIRC_SOURCES}
+)
+target_include_directories(marker_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(marker_test PRIVATE ${AVUTIL_LIB} ${SWSCALE_LIB})
+
+# ---- 测试: 帧号对齐 + 截图序列输入 端到端 ----
+add_executable(align_test
+    tests/align_test.cpp
+    ${CORE_SOURCES}
+    ${QRCODEGEN_SOURCES} ${QUIRC_SOURCES}
+)
+target_include_directories(align_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FFMPEG_INCLUDE_DIR}
+    ${LIBVMAF_INCLUDE_DIR}
+)
+target_link_libraries(align_test PRIVATE
+    ${AVFORMAT_LIB}
+    ${AVCODEC_LIB}
+    ${AVUTIL_LIB}
+    ${SWSCALE_LIB}
+    ${VMAF_LIB}
+)
+
+# ---- 工具: 命令行 VMAF 评测 ----
+add_executable(eval_cli
+    tools/eval_cli.cpp
+    ${CORE_SOURCES}
+    ${QRCODEGEN_SOURCES} ${QUIRC_SOURCES}
+)
+target_include_directories(eval_cli PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FFMPEG_INCLUDE_DIR}
+    ${LIBVMAF_INCLUDE_DIR}
+)
+target_link_libraries(eval_cli PRIVATE
+    ${AVFORMAT_LIB}
+    ${AVCODEC_LIB}
+    ${AVUTIL_LIB}
+    ${SWSCALE_LIB}
+    ${VMAF_LIB}
+)
+
+# ---- 工具: QR 帧号烧录 ----
+add_executable(marker_burn
+    tools/marker_burn.cpp
+    core/frame.cpp core/marker.cpp core/video_reader.cpp core/yuv_reader.cpp
+    ${QRCODEGEN_SOURCES} ${QUIRC_SOURCES}
+)
+target_include_directories(marker_burn PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(marker_burn PRIVATE
+    ${AVFORMAT_LIB}
+    ${AVCODEC_LIB}
+    ${AVUTIL_LIB}
+    ${SWSCALE_LIB}
+)
+add_custom_command(TARGET marker_burn POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} ${FFMPEG_EXES}
+            $<TARGET_FILE_DIR:marker_burn>
+)

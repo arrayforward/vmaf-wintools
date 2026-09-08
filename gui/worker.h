@@ -20,7 +20,9 @@ signals:
     void frameReady(int idx, int refIdx, int distIdx, bool dropped, bool scoreValid, double score,
                     const QImage& refThumb, const QImage& distThumb);
     void evalFinished(bool ok, const QString& error, double mean, double harmonic, double minS,
-                      double maxS, int matched, int dropped, int frozen);
+                      double maxS, int matched, int dropped, int frozen,
+                      int markerUnrecognized, double markerCoverage, int freezeSegments,
+                      int freezeMaxLen);
 
 protected:
     void run() override;

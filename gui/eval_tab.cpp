@@ -1,12 +1,8 @@
 #include "eval_tab.h"
 
-#include "crop_select_widget.h"
 #include "vmaf_chart_widget.h"
 #include "worker.h"
 
-#include "../core/video_reader.h"
-
-#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -15,7 +11,6 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -51,40 +46,7 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
     fileForm->addRow(tr("目标视频:"), distRow);
     layout->addLayout(fileForm);
 
-    // ---- 裁剪预览 ----
-    auto* cropGroup = new QGroupBox(tr("裁剪区域 (拖拽框选, 默认为中心 1/2)"));
-    auto* cropLayout = new QHBoxLayout(cropGroup);
-    refCropView_ = new CropSelectWidget;
-    distCropView_ = new CropSelectWidget;
-    cropLayout->addWidget(refCropView_, 1);
-    cropLayout->addWidget(distCropView_, 1);
-
-    auto* cropSide = new QVBoxLayout;
-    linkCropCheck_ = new QCheckBox(tr("联动框选"));
-    linkCropCheck_->setChecked(true);
-    cropSide->addWidget(linkCropCheck_);
-    auto* resetBtn = new QPushButton(tr("恢复默认"));
-    auto* fullBtn = new QPushButton(tr("全画面"));
-    cropSide->addWidget(resetBtn);
-    cropSide->addWidget(fullBtn);
-
-    auto* cropSpinRow = new QHBoxLayout;
-    cropX_ = new QSpinBox; cropY_ = new QSpinBox; cropW_ = new QSpinBox; cropH_ = new QSpinBox;
-    for (auto* s : {cropX_, cropY_, cropW_, cropH_}) s->setRange(0, 16384);
-    cropSpinRow->addWidget(new QLabel("x"));
-    cropSpinRow->addWidget(cropX_);
-    cropSpinRow->addWidget(new QLabel("y"));
-    cropSpinRow->addWidget(cropY_);
-    cropSpinRow->addWidget(new QLabel("w"));
-    cropSpinRow->addWidget(cropW_);
-    cropSpinRow->addWidget(new QLabel("h"));
-    cropSpinRow->addWidget(cropH_);
-    cropSide->addLayout(cropSpinRow);
-    cropSide->addStretch();
-    cropLayout->addLayout(cropSide);
-    layout->addWidget(cropGroup, 2);
-
-    // ---- 参数区 ----
+    // ---- 参数区 (对齐与裁剪全自动: QR 帧号对齐 + QR 反推视频区域) ----
     auto* paramRow = new QHBoxLayout;
     modelCombo_ = new QComboBox;
     {
@@ -103,14 +65,6 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
     paramRow->addWidget(new QLabel(tr("模型:")));
     paramRow->addWidget(modelCombo_);
     paramRow->addWidget(modelPathEdit_);
-
-    alignCombo_ = new QComboBox;
-    alignCombo_->addItem(tr("绿屏标定"), static_cast<int>(vt::AlignMode::GreenScreen));
-    alignCombo_->addItem(tr("内容自动匹配"), static_cast<int>(vt::AlignMode::Content));
-    alignCombo_->addItem(tr("不对齐"), static_cast<int>(vt::AlignMode::None));
-    alignCombo_->setCurrentIndex(1);
-    paramRow->addWidget(new QLabel(tr("对齐:")));
-    paramRow->addWidget(alignCombo_);
 
     threadsSpin_ = new QSpinBox;
     threadsSpin_->setRange(0, 64);
@@ -168,8 +122,6 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
     connect(exportJsonBtn_, &QPushButton::clicked, this, &EvalTab::exportJson);
     connect(exportCsvBtn_, &QPushButton::clicked, this, &EvalTab::exportCsv);
     connect(chart_, &VmafChartWidget::frameSelected, this, &EvalTab::onChartFrameSelected);
-    connect(refCropView_, &CropSelectWidget::cropChanged, this, &EvalTab::onCropEdited);
-    connect(distCropView_, &CropSelectWidget::cropChanged, this, &EvalTab::onCropEdited);
 
     connect(modelCombo_, &QComboBox::currentIndexChanged, this, [this] {
         const bool custom = modelCombo_->currentData().toString() == "__custom";
@@ -178,34 +130,6 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
             const QString f = QFileDialog::getOpenFileName(this, tr("选择模型"), QString(),
                                                            "VMAF 模型 (*.json)");
             if (!f.isEmpty()) modelPathEdit_->setText(f);
-        }
-    });
-
-    for (auto* s : {cropX_, cropY_, cropW_, cropH_}) {
-        connect(s, &QSpinBox::valueChanged, this, [this] {
-            if (updatingSpinboxes_) return;
-            const QRect r(cropX_->value(), cropY_->value(), cropW_->value(), cropH_->value());
-            refCropView_->setCropRect(r);
-            if (linkCropCheck_->isChecked()) distCropView_->setCropRect(r);
-        });
-    }
-
-    connect(resetBtn, &QPushButton::clicked, this, [this] {
-        refCropView_->setCropRect(QRect());
-        distCropView_->setCropRect(QRect());
-        refCropView_->update();
-        distCropView_->update();
-    });
-    connect(fullBtn, &QPushButton::clicked, this, [this] {
-        if (!refCropView_->imageSize().isEmpty()) {
-            const QSize s = refCropView_->imageSize();
-            const QRect r(0, 0, s.width() & ~1, s.height() & ~1);
-            refCropView_->setCropRect(r);
-            onCropEdited(r);
-        }
-        if (!distCropView_->imageSize().isEmpty()) {
-            const QSize s = distCropView_->imageSize();
-            distCropView_->setCropRect(QRect(0, 0, s.width() & ~1, s.height() & ~1));
         }
     });
 
@@ -226,7 +150,6 @@ void EvalTab::browseRef() {
         this, tr("选择参考视频"), QString(), tr("视频 (*.mp4 *.mkv *.avi *.mov *.flv *.yuv);;所有文件 (*)"));
     if (f.isEmpty()) return;
     refEdit_->setText(f);
-    loadFirstFrames();
 }
 
 void EvalTab::browseDist() {
@@ -234,32 +157,13 @@ void EvalTab::browseDist() {
         this, tr("选择目标视频"), QString(), tr("视频 (*.mp4 *.mkv *.avi *.mov *.flv *.yuv);;所有文件 (*)"));
     if (f.isEmpty()) return;
     distEdit_->setText(f);
-    loadFirstFrames();
 }
 
-void EvalTab::loadFirstFrames() {
-    const auto loadThumb = [this](const QString& path) -> QImage {
-        if (path.isEmpty()) return QImage();
-        std::string err;
-        auto reader = vt::createReader(path.toStdString(), yuvSizeEdit_->text().toStdString(),
-                                       30.0, err);
-        if (!reader || !reader->open(err)) return QImage();
-        vt::Frame f;
-        QImage img;
-        if (reader->readFrame(f)) {
-            // 用原始分辨率图像, 保证框选坐标 = 原始像素坐标
-            std::vector<uint8_t> rgb;
-            int w, h;
-            if (vt::frameToRgbThumb(f, rgb, w, h, 4096))
-                img = QImage(rgb.data(), w, h, w * 3, QImage::Format_RGB888).copy();
-        }
-        reader->close();
-        return img;
-    };
-    const QImage rImg = loadThumb(refEdit_->text());
-    if (!rImg.isNull()) refCropView_->setImage(rImg);
-    const QImage dImg = loadThumb(distEdit_->text());
-    if (!dImg.isNull()) distCropView_->setImage(dImg);
+void EvalTab::setDistInput(const QString& path) { distEdit_->setText(path); }
+
+void EvalTab::startEvaluation() {
+    if (worker_) return; // 正在评估中
+    startEval();
 }
 
 void EvalTab::appendLog(const QString& level, const QString& msg) {
@@ -276,8 +180,6 @@ void EvalTab::setRunning(bool running) {
     stopBtn_->setEnabled(running);
     exportJsonBtn_->setEnabled(!running && hasSummary_);
     exportCsvBtn_->setEnabled(!running && hasSummary_);
-    refCropView_->setInteractive(!running);
-    distCropView_->setInteractive(!running);
 }
 
 void EvalTab::startEval() {
@@ -294,14 +196,6 @@ void EvalTab::startEval() {
                              ? modelPathEdit_->text().toStdString()
                              : modelCombo_->currentData().toString().toStdString();
     cfg.vmaf.threads = threadsSpin_->value();
-    cfg.alignMode = static_cast<vt::AlignMode>(alignCombo_->currentData().toInt());
-
-    const QRect rc = refCropView_->cropRect();
-    if (rc.isValid() && !rc.isNull())
-        cfg.refCrop = {rc.x(), rc.y(), rc.width(), rc.height()};
-    const QRect dc = distCropView_->cropRect();
-    if (dc.isValid() && !dc.isNull())
-        cfg.distCrop = {dc.x(), dc.y(), dc.width(), dc.height()};
 
     QSettings st("vmaf_tool");
     st.setValue("lastRef", refEdit_->text());
@@ -337,7 +231,7 @@ void EvalTab::onProgress(int done, int total) {
 }
 
 void EvalTab::onFrame(int /*idx*/, int refIdx, int distIdx, bool dropped, bool scoreValid,
-                      double score, const QImage& refThumb, const QImage& distThumb) {
+                      double score, const QImage& /*refThumb*/, const QImage& /*distThumb*/) {
     // 以参考帧号为 key 更新/新增条目
     int pos = -1;
     for (int i = entries_.size() - 1; i >= 0 && i > entries_.size() - 6; --i) {
@@ -362,30 +256,36 @@ void EvalTab::onFrame(int /*idx*/, int refIdx, int distIdx, bool dropped, bool s
         chart_->updateFrame(pos, score);
         appendLog("info", tr("帧 %1 VMAF=%2").arg(refIdx).arg(score, 0, 'f', 2));
     }
-    if (!refThumb.isNull()) {
-        e.refThumb = refThumb;
-        e.distThumb = distThumb;
-        refCropView_->setImage(refThumb);
-        distCropView_->setImage(distThumb);
-    }
 }
 
 void EvalTab::onFinished(bool ok, const QString& error, double mean, double harmonic, double minS,
-                         double maxS, int matched, int dropped, int frozen) {
+                         double maxS, int matched, int dropped, int frozen,
+                         int markerUnrecognized, double markerCoverage, int freezeSegments,
+                         int freezeMaxLen) {
     setRunning(false);
     if (ok) {
         hasSummary_ = true;
         const double dropRate = matched + dropped > 0
                                     ? 100.0 * dropped / (matched + dropped)
                                     : 0.0;
-        resultLabel_->setText(tr("VMAF mean=%1  harmonic=%2  min=%3  max=%4  |  匹配 %5 帧  丢帧率 %6%  冻结帧 %7")
-                                  .arg(mean, 0, 'f', 2)
-                                  .arg(harmonic, 0, 'f', 2)
-                                  .arg(minS, 0, 'f', 2)
-                                  .arg(maxS, 0, 'f', 2)
-                                  .arg(matched)
-                                  .arg(dropRate, 0, 'f', 1)
-                                  .arg(frozen));
+        QString text = tr("VMAF mean=%1  harmonic=%2  min=%3  max=%4  |  匹配 %5 帧  丢帧 %6 (%7%)  冻结帧 %8")
+                           .arg(mean, 0, 'f', 2)
+                           .arg(harmonic, 0, 'f', 2)
+                           .arg(minS, 0, 'f', 2)
+                           .arg(maxS, 0, 'f', 2)
+                           .arg(matched)
+                           .arg(dropped)
+                           .arg(dropRate, 0, 'f', 1)
+                           .arg(frozen);
+        // 帧号标记统计 (片源烧录了帧号时才有意义)
+        if (markerCoverage > 0 || markerUnrecognized > 0) {
+            text += tr("  |  帧号覆盖率 %1%  未识别 %2  冻结段 %3  最长冻结 %4")
+                        .arg(markerCoverage * 100, 0, 'f', 1)
+                        .arg(markerUnrecognized)
+                        .arg(freezeSegments)
+                        .arg(freezeMaxLen);
+        }
+        resultLabel_->setText(text);
         exportJsonBtn_->setEnabled(true);
         exportCsvBtn_->setEnabled(true);
     } else {
@@ -402,8 +302,6 @@ void EvalTab::onFinished(bool ok, const QString& error, double mean, double harm
 void EvalTab::onChartFrameSelected(int idx) {
     if (idx < 0 || idx >= entries_.size()) return;
     const auto& e = entries_[idx];
-    if (!e.refThumb.isNull()) refCropView_->setImage(e.refThumb);
-    if (!e.distThumb.isNull()) distCropView_->setImage(e.distThumb);
     if (e.dropped)
         appendLog("warn", tr("查看帧 %1 (丢帧)").arg(e.refIdx));
     else
@@ -411,20 +309,6 @@ void EvalTab::onChartFrameSelected(int idx) {
                               .arg(e.refIdx)
                               .arg(e.distIdx)
                               .arg(e.score, 0, 'f', 2));
-}
-
-void EvalTab::onCropEdited(const QRect& rect) {
-    updatingSpinboxes_ = true;
-    cropX_->setValue(rect.x());
-    cropY_->setValue(rect.y());
-    cropW_->setValue(rect.width());
-    cropH_->setValue(rect.height());
-    updatingSpinboxes_ = false;
-    if (linkCropCheck_->isChecked()) {
-        auto* src = qobject_cast<CropSelectWidget*>(sender());
-        auto* other = src == refCropView_ ? distCropView_ : refCropView_;
-        if (other && other->imageSize() == src->imageSize()) other->setCropRect(rect);
-    }
 }
 
 void EvalTab::exportJson() {

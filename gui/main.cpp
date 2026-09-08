@@ -41,8 +41,7 @@ static void convertWinArgs(int& argc, char**& argv) {
 }
 
 static int runCli(int argc, char* argv[]) {
-    // vmaf_tool --cli <ref> <dist> [--model name_or_path] [--align none|green|content]
-    //           [--yuv-size 1920x1080] [--threads N]
+    // vmaf_tool --cli <ref> <dist> [--model name_or_path] [--yuv-size 1920x1080] [--threads N]
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
@@ -50,7 +49,7 @@ static int runCli(int argc, char* argv[]) {
     if (argc < 4) {
         fprintf(stderr,
                 "用法: vmaf_tool --cli <参考视频> <目标视频> [--model 模型] "
-                "[--align none|green|content] [--yuv-size 1920x1080] [--threads N]\n");
+                "[--yuv-size 1920x1080] [--threads N]\n");
         return 1;
     }
     vt::PipelineConfig cfg;
@@ -60,10 +59,6 @@ static int runCli(int argc, char* argv[]) {
         const std::string k = argv[i];
         const std::string v = argv[i + 1];
         if (k == "--model") cfg.vmaf.modelName = v;
-        else if (k == "--align")
-            cfg.alignMode = v == "green" ? vt::AlignMode::GreenScreen
-                            : v == "none" ? vt::AlignMode::None
-                                          : vt::AlignMode::Content;
         else if (k == "--yuv-size") { cfg.yuvRefSize = v; cfg.yuvDistSize = v; }
         else if (k == "--threads") cfg.vmaf.threads = atoi(v.c_str());
     }

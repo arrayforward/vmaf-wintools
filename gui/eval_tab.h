@@ -8,12 +8,10 @@
 class QLineEdit;
 class QComboBox;
 class QSpinBox;
-class QCheckBox;
 class QPushButton;
 class QProgressBar;
 class QPlainTextEdit;
 class QLabel;
-class CropSelectWidget;
 class VmafChartWidget;
 class EvalWorker;
 
@@ -23,10 +21,13 @@ public:
     explicit EvalTab(QWidget* parent = nullptr);
     ~EvalTab() override;
 
+    // 供采集 Tab 联动: 设置目标输入 (可为截图文件夹) 并触发评估
+    void setDistInput(const QString& path);
+    void startEvaluation();
+
 private slots:
     void browseRef();
     void browseDist();
-    void loadFirstFrames();
     void startEval();
     void stopEval();
     void exportJson();
@@ -37,9 +38,9 @@ private slots:
     void onFrame(int idx, int refIdx, int distIdx, bool dropped, bool scoreValid, double score,
                  const QImage& refThumb, const QImage& distThumb);
     void onFinished(bool ok, const QString& error, double mean, double harmonic, double minS,
-                    double maxS, int matched, int dropped, int frozen);
+                    double maxS, int matched, int dropped, int frozen, int markerUnrecognized,
+                    double markerCoverage, int freezeSegments, int freezeMaxLen);
     void onChartFrameSelected(int idx);
-    void onCropEdited(const QRect& rect);
 
 private:
     void appendLog(const QString& level, const QString& msg);
@@ -49,15 +50,8 @@ private:
     QLineEdit* distEdit_;
     QComboBox* modelCombo_;
     QLineEdit* modelPathEdit_;
-    QComboBox* alignCombo_;
     QSpinBox* threadsSpin_;
     QLineEdit* yuvSizeEdit_;
-
-    CropSelectWidget* refCropView_;
-    CropSelectWidget* distCropView_;
-    QCheckBox* linkCropCheck_;
-    QSpinBox *cropX_, *cropY_, *cropW_, *cropH_;
-    bool updatingSpinboxes_ = false;
 
     QPushButton* startBtn_;
     QPushButton* stopBtn_;
@@ -75,7 +69,6 @@ private:
         int refIdx = -1, distIdx = -1;
         bool dropped = false;
         double score = -1;
-        QImage refThumb, distThumb;
     };
     QVector<FrameEntry> entries_;
     vt::Summary lastSummary_;

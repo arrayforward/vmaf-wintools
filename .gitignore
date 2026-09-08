@@ -1,6 +1,16 @@
 build/
-third_party/
+third_party/*
+!third_party/qrcodegen/
+!third_party/quirc/
 testdata/
 *.user
 aqtinstall.log
 *.zip
+
+# Android 构建临时产物
+android_player/.gradle-dist/
+android_player/local.properties
+android_player/app/build/
+android_player/.gradle/
+android_player/app/src/main/assets/test_video.mp4
+dist/

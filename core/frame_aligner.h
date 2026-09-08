@@ -1,28 +1,16 @@
 #pragma once
 
-#include "frame.h"
-
-#include <array>
+#include <cstdint>
 #include <vector>
 
 namespace vt {
 
-// 32x32 灰度缩略图, 用于内容匹配
-using Thumb = std::array<float, 1024>;
-
-void makeThumb(const Frame& f, Thumb& out);
-double ncc(const Thumb& a, const Thumb& b); // [-1, 1]
-
-struct AlignOptions {
-    int searchWindow = 16;      // 单调匹配时的前向搜索窗口 (目标帧数)
-    double matchThresh = 0.6;   // NCC 阈值, 低于此值判定为丢帧
-    int coarseRangeSec = 10;    // 粗对齐搜索范围 (秒)
-};
-
 // 一端的完整扫描信息
 struct VideoScan {
-    std::vector<Thumb> thumbs;
-    std::vector<char> solid; // 是否纯色帧 (绿屏)
+    std::vector<int> markerIndex; // 每帧的帧号标记, -1 = 未识别
+    int markerCount = 0;          // 识别出帧号标记的帧数
+    // 所有有效标记的 QR 码区实测外接框均值 (输入图坐标系); markerQrSize<=0 表示无
+    double markerQrX = 0, markerQrY = 0, markerQrSize = 0;
     int64_t totalFrames = 0;
     double fps = 0;
     int width = 0, height = 0;
@@ -34,21 +22,17 @@ struct FrameMapping {
     int refStart = 0;  // 对齐后参考起始帧
     int distStart = 0; // 对齐后目标起始帧
     int droppedCount = 0;
-    int freezeCount = 0; // 目标帧被重复匹配的次数统计
+    int freezeCount = 0;    // 目标帧被重复匹配的次数统计
+    int freezeSegments = 0; // 帧号对齐: 目标侧连续重复帧号的段数
+    int freezeMaxLen = 0;   // 帧号对齐: 最长冻结段长度 (帧)
 };
 
 class FrameAligner {
 public:
-    // 绿屏标定: 找开头连续纯色帧段的结束位置, 返回首个内容帧号; 失败返回 -1
-    static int detectGreenTransition(const VideoScan& scan);
-
-    // 粗对齐: 在 ±coarseRange 内搜索 NCC 序列最优偏移, 返回目标相对参考的帧偏移
-    // (distIdx ≈ refIdx + offset)
-    static int coarseOffset(const VideoScan& ref, const VideoScan& dist, const AlignOptions& opt);
-
-    // 单调序列匹配, 生成帧映射
-    static FrameMapping buildMapping(const VideoScan& ref, const VideoScan& dist, int refStart,
-                                     int distStart, const AlignOptions& opt);
+    // 帧号标记对齐: 按 QR 帧号精确匹配 (refStart/distStart 恒为 0)
+    // 目标侧同一帧号多次出现取首次, 重复次数计入 freezeCount;
+    // 参考侧有帧号而目标侧缺失计入 droppedCount; 未识别的帧不映射 (refToDist = -1)
+    static FrameMapping buildMarkerMapping(const VideoScan& ref, const VideoScan& dist);
 };
 
 } // namespace vt

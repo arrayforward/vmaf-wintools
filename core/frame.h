@@ -39,7 +39,4 @@ bool frameToRgbThumb(const Frame& f, std::vector<uint8_t>& rgb, int& outW, int& 
 // 缩放帧 (基于 swscale)
 Frame scaleFrame(const Frame& src, int w, int h);
 
-// 判断是否为纯色帧 (用于绿屏检测, 亮度方差极低)
-bool isSolidColorFrame(const Frame& f, double stddevThresh = 3.0);
-
 } // namespace vt

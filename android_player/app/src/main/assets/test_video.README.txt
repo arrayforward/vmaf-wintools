@@ -1,0 +1,12 @@
+把测试片源放到本目录（app/src/main/assets/）下，并重命名为：
+
+    test_video.mp4
+
+要求：
+- 每帧已烧录 QR 帧号标记的测试视频
+- 1080p60，时长 30~60 秒
+- 文件名必须是 test_video.mp4（区分大小写，Android assets 原样打包）
+
+放好后重新构建安装 APK 即可，App 启动后会自动全屏循环播放。
+若未放置该文件，App 不会崩溃，只会显示纯黑画面并在 logcat 输出警告
+（tag: VmafPlayer）。

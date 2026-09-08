@@ -26,7 +26,9 @@ void EvalWorker::run() {
     };
     cb.onFinished = [this](const vt::Summary& s) {
         emit evalFinished(s.ok, QString::fromStdString(s.error), s.mean, s.harmonicMean,
-                          s.minScore, s.maxScore, s.matched, s.dropped, s.frozen);
+                          s.minScore, s.maxScore, s.matched, s.dropped, s.frozen,
+                          s.markerUnrecognized, s.markerCoverage, s.freezeSegments,
+                          s.freezeMaxLen);
     };
 
     pipeline_.run(cfg_, cb);

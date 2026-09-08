@@ -1,5 +1,9 @@
 #include "video_reader.h"
 
+#include <cctype>
+#include <filesystem>
+#include <string>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -9,6 +13,50 @@ extern "C" {
 
 namespace vt {
 
+namespace {
+
+// 路径是否为 image2 序列模式 (含 %d / %0Nd, 如 shot_%05d.png)
+bool isImagePattern(const std::string& p) {
+    const auto pct = p.find('%');
+    if (pct == std::string::npos) return false;
+    size_t i = pct + 1;
+    if (i < p.size() && p[i] == '0') ++i;
+    size_t digits = 0;
+    while (i < p.size() && std::isdigit(static_cast<unsigned char>(p[i]))) { ++i; ++digits; }
+    return i < p.size() && p[i] == 'd' && digits > 0;
+}
+
+bool isImageExt(const std::string& ext) {
+    return ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" || ext == "webp" ||
+           ext == "tif" || ext == "tiff";
+}
+
+// 截图文件夹 -> image2 模式: 取首个图片文件, 文件名末尾数字段替换为 %0Nd
+// (如 shots/00001.png -> shots/%05d.png); 非目录或找不到带数字的图片返回 ""
+std::string dirToImagePattern(const std::string& dir) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_directory(fs::path(dir), ec)) return "";
+    for (const auto& e : fs::directory_iterator(fs::path(dir), ec)) {
+        if (!e.is_regular_file()) continue;
+        const std::string name = e.path().filename().string();
+        const auto dot = name.find_last_of('.');
+        if (dot == std::string::npos) continue;
+        std::string ext = name.substr(dot + 1);
+        for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (!isImageExt(ext)) continue;
+        const std::string stem = name.substr(0, dot);
+        size_t begin = stem.size();
+        while (begin > 0 && std::isdigit(static_cast<unsigned char>(stem[begin - 1]))) --begin;
+        if (begin == stem.size()) continue; // 文件名无数字段
+        return dir + "/" + stem.substr(0, begin) + "%0" +
+               std::to_string(stem.size() - begin) + "d" + name.substr(dot);
+    }
+    return "";
+}
+
+} // namespace
+
 class FFmpegReader : public VideoReader {
 public:
     explicit FFmpegReader(std::string path) : path_(std::move(path)) {}
@@ -16,7 +64,12 @@ public:
     ~FFmpegReader() override { close(); }
 
     bool open(std::string& err) override {
-        if (avformat_open_input(&fmt_, path_.c_str(), nullptr, nullptr) < 0) {
+        // image2 序列: 截图采集帧率不固定, 固定按 1fps 读取全部图片
+        AVDictionary* opts = nullptr;
+        if (isImagePattern(path_)) av_dict_set(&opts, "framerate", "1", 0);
+        const int rc = avformat_open_input(&fmt_, path_.c_str(), nullptr, &opts);
+        av_dict_free(&opts);
+        if (rc < 0) {
             err = "无法打开视频: " + path_;
             return false;
         }
@@ -146,6 +199,9 @@ std::unique_ptr<VideoReader> createReader(const std::string& path, const std::st
         }
         return createYuvReader(path, w, h, yuvFps);
     }
+    // 截图文件夹: 转成 image2 序列模式
+    const std::string pattern = dirToImagePattern(path);
+    if (!pattern.empty()) return createFFmpegReader(pattern);
     return createFFmpegReader(path);
 }
 
