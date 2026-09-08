@@ -26,7 +26,6 @@ public:
     void startEvaluation();
 
 private slots:
-    void browseRef();
     void browseDist();
     void startEval();
     void stopEval();
@@ -46,8 +45,9 @@ private:
     void appendLog(const QString& level, const QString& msg);
     void setRunning(bool running);
 
-    QLineEdit* refEdit_;
     QLineEdit* distEdit_;
+    QLabel* refInfoLabel_;
+    QString refPath_; // 参考片源 (自动解析, 见 ref_source.h)
     QComboBox* modelCombo_;
     QLineEdit* modelPathEdit_;
     QSpinBox* threadsSpin_;
@@ -69,8 +69,11 @@ private:
         int refIdx = -1, distIdx = -1;
         bool dropped = false;
         double score = -1;
+        int chartIdx = -1; // 在图表中的样本序号, -1 = 未进图表 (丢帧)
     };
     QVector<FrameEntry> entries_;
+    int sampleCount_ = 0; // 采样模式: 有效样本计数 (图表 x 轴)
+    bool samplingMode_ = false;
     vt::Summary lastSummary_;
     bool hasSummary_ = false;
 };

@@ -11,16 +11,16 @@ VmafChartWidget::VmafChartWidget(QWidget* parent) : QWidget(parent) {
 
 void VmafChartWidget::clear() {
     scores_.clear();
-    dropped_.clear();
+    frameNos_.clear();
     current_ = -1;
     viewStart_ = 0;
     viewSpan_ = 0;
     update();
 }
 
-void VmafChartWidget::appendFrame(double score, bool dropped) {
-    scores_.append(dropped ? -1 : score);
-    dropped_.append(dropped);
+void VmafChartWidget::appendFrame(double score, int frameNo) {
+    scores_.append(score);
+    frameNos_.append(frameNo);
     update();
 }
 
@@ -33,6 +33,11 @@ void VmafChartWidget::updateFrame(int idx, double score) {
 
 void VmafChartWidget::setCurrentFrame(int idx) {
     current_ = idx;
+    update();
+}
+
+void VmafChartWidget::setXAxisTitle(const QString& title) {
+    xTitle_ = title;
     update();
 }
 
@@ -78,16 +83,7 @@ void VmafChartWidget::paintEvent(QPaintEvent*) {
     const int i0 = qBound(0, static_cast<int>(viewStart_), n - 1);
     const int i1 = qBound(0, static_cast<int>(viewStart_ + span) + 1, n - 1);
 
-    // 丢帧标记
-    p.setPen(QPen(QColor(220, 60, 60), 1));
-    for (int i = i0; i <= i1; ++i) {
-        if (dropped_[i]) {
-            const double x = frameToX(i);
-            p.drawLine(QPointF(x, a.top()), QPointF(x, a.bottom()));
-        }
-    }
-
-    // 折线
+    // 折线 (跳过分数未就绪的点, 直接连接相邻有效样本)
     p.setPen(QPen(QColor(80, 180, 255), 1.5));
     QPointF prev;
     bool hasPrev = false;
@@ -113,14 +109,19 @@ void VmafChartWidget::paintEvent(QPaintEvent*) {
         }
         p.setPen(Qt::white);
         p.drawText(QRectF(x + 6, a.top(), 200, 16),
-                   QString("帧 %1  VMAF=%2").arg(current_).arg(scores_[current_], 0, 'f', 2));
+                   QString("%1 %2  VMAF=%3")
+                       .arg(xTitle_.isEmpty() ? QStringLiteral("帧") : xTitle_)
+                       .arg(frameNos_[current_])
+                       .arg(scores_[current_], 0, 'f', 2));
     }
 
-    // X 轴标签
+    // X 轴标签 (显示可见范围两端样本的标注值)
     p.setPen(QColor(160, 160, 160));
-    p.drawText(QRectF(a.left(), a.bottom() + 4, 100, 16), QString::number(i0));
+    p.drawText(QRectF(a.left(), a.bottom() + 4, 100, 16), QString::number(frameNos_[i0]));
     p.drawText(QRectF(a.right() - 100, a.bottom() + 4, 100, 16), Qt::AlignRight,
-               QString::number(i1));
+               QString::number(frameNos_[i1]));
+    if (!xTitle_.isEmpty())
+        p.drawText(QRectF(a.left(), a.bottom() + 4, a.width(), 16), Qt::AlignHCenter, xTitle_);
 }
 
 void VmafChartWidget::mousePressEvent(QMouseEvent* e) {

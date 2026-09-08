@@ -65,8 +65,9 @@ public:
 
     bool open(std::string& err) override {
         // image2 序列: 截图采集帧率不固定, 固定按 1fps 读取全部图片
+        imageSeq_ = isImagePattern(path_);
         AVDictionary* opts = nullptr;
-        if (isImagePattern(path_)) av_dict_set(&opts, "framerate", "1", 0);
+        if (imageSeq_) av_dict_set(&opts, "framerate", "1", 0);
         const int rc = avformat_open_input(&fmt_, path_.c_str(), nullptr, &opts);
         av_dict_free(&opts);
         if (rc < 0) {
@@ -158,6 +159,7 @@ public:
     int height() const override { return h_; }
     double fps() const override { return fps_; }
     int64_t totalFrames() const override { return totalFrames_; }
+    bool isImageSequence() const override { return imageSeq_; }
 
     void close() override {
         if (sws_) sws_freeContext(sws_);
@@ -181,6 +183,7 @@ private:
     double fps_ = 0;
     int64_t totalFrames_ = -1;
     bool pktSent_ = false;
+    bool imageSeq_ = false;
 };
 
 std::unique_ptr<VideoReader> createFFmpegReader(const std::string& path) {

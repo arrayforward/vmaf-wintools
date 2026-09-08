@@ -154,6 +154,7 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
 
     // ---------- 第一遍: 扫描两端视频 ----------
     VideoScan scanRef, scanDist;
+    bool distSampling = false; // 目标为截图采样序列 (image2)
     {
         std::string err;
         auto reader = createReader(cfg.refPath, cfg.yuvRefSize, cfg.yuvFps, err);
@@ -183,6 +184,7 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
         log(cb, "info", "目标视频: " + std::to_string(reader->width()) + "x" +
                             std::to_string(reader->height()) + " @ " +
                             std::to_string(reader->fps()).substr(0, 5) + "fps");
+        distSampling = reader->isImageSequence();
         if (!scanVideo(*reader, scanDist, stopRequested, cb, "[目标]")) {
             summary.error = "已取消";
             if (cb.onFinished) cb.onFinished(summary);
@@ -220,19 +222,27 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
         return;
     }
     log(cb, "info", "两端帧号识别率均 >= 80%, 使用帧号对齐");
+    if (distSampling)
+        log(cb, "info", "目标为截图采样序列, 仅统计匹配帧对 (未采到的参考帧不计丢帧)");
     FrameMapping mapping = FrameAligner::buildMarkerMapping(scanRef, scanDist);
 
     int matched = 0;
     for (int d : mapping.refToDist)
         if (d >= 0) ++matched;
-    summary.dropped = mapping.droppedCount;
+    // 采样模式下未匹配的参考帧只是未采样, 不计丢帧
+    summary.dropped = distSampling ? 0 : mapping.droppedCount;
     summary.frozen = mapping.freezeCount;
     summary.matched = matched;
     summary.freezeSegments = mapping.freezeSegments;
     summary.freezeMaxLen = mapping.freezeMaxLen;
-    log(cb, "info", "帧映射: 匹配 " + std::to_string(matched) + " 对, 丢帧 " +
-                        std::to_string(mapping.droppedCount) + ", 冻结/重复目标帧 " +
-                        std::to_string(mapping.freezeCount));
+    if (distSampling)
+        log(cb, "info", "帧映射: 匹配 " + std::to_string(matched) + " 对, 未采样 " +
+                            std::to_string(mapping.droppedCount) + ", 冻结/重复目标帧 " +
+                            std::to_string(mapping.freezeCount));
+    else
+        log(cb, "info", "帧映射: 匹配 " + std::to_string(matched) + " 对, 丢帧 " +
+                            std::to_string(mapping.droppedCount) + ", 冻结/重复目标帧 " +
+                            std::to_string(mapping.freezeCount));
 
     if (matched == 0) {
         summary.error = "没有匹配到任何帧对, 无法评估 (两端片源帧号无交集)";
@@ -350,6 +360,9 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
     }
 
     const int totalRef = static_cast<int>(mapping.refToDist.size());
+    // 采样模式下进度按匹配对数走, 未采样的参考帧不占进度
+    const int progressTotal = distSampling ? matched : totalRef;
+    int progressDone = 0;
     int distWanted = mapping.distStart;
     Frame rf, df;
     int pushed = 0;
@@ -363,14 +376,15 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
 
     for (int r = 0; r < totalRef && !stopRequested.load(); ++r) {
         const int dIdx = mapping.refToDist[static_cast<size_t>(r)];
-        FrameResult fr;
-        fr.refIdx = r + mapping.refStart;
-        fr.distIdx = dIdx;
 
         // 每个参考帧都必须读取, 保持解码顺序
         if (!refReader->readFrame(rf)) break;
 
         if (dIdx < 0) {
+            if (distSampling) continue; // 未采样, 不是丢帧
+            FrameResult fr;
+            fr.refIdx = r + mapping.refStart;
+            fr.distIdx = dIdx;
             fr.dropped = true;
             summary.frames.push_back(fr);
             if (cb.onFrame) cb.onFrame(fr);
@@ -378,6 +392,10 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
             log(cb, "warn", "帧 " + std::to_string(fr.refIdx) + " 丢帧");
             continue;
         }
+
+        FrameResult fr;
+        fr.refIdx = r + mapping.refStart;
+        fr.distIdx = dIdx;
 
         // 顺序解码目标到 dIdx
         bool gotDist = false;
@@ -429,7 +447,7 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
             frameToRgbThumb(df, preview.rgbDist, preview.thumbW, preview.thumbH);
         if (cb.onFrame) cb.onFrame(preview);
 
-        if (cb.onProgress) cb.onProgress(r + 1, totalRef);
+        if (cb.onProgress) cb.onProgress(distSampling ? ++progressDone : r + 1, progressTotal);
     }
 
     refReader->close();

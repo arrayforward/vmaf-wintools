@@ -1,5 +1,6 @@
 #include "eval_tab.h"
 
+#include "ref_source.h"
 #include "vmaf_chart_widget.h"
 #include "worker.h"
 
@@ -30,13 +31,18 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
 
     // ---- 文件选择 ----
+    // 参考片源固定 (与 APK 内置片源同一份), 自动解析, 只读显示
     auto* fileForm = new QFormLayout;
-    auto* refRow = new QHBoxLayout;
-    refEdit_ = new QLineEdit;
-    auto* refBtn = new QPushButton(tr("浏览…"));
-    refRow->addWidget(refEdit_);
-    refRow->addWidget(refBtn);
-    fileForm->addRow(tr("参考视频:"), refRow);
+    refPath_ = resolveRefSource();
+    refInfoLabel_ = new QLabel;
+    if (!refPath_.isEmpty()) {
+        refInfoLabel_->setText(tr("参考片源: %1 (1080p60)").arg(kRefSourceName));
+        refInfoLabel_->setToolTip(refPath_);
+    } else {
+        refInfoLabel_->setText(tr("参考片源: 未找到 %1").arg(kRefSourceName));
+        refInfoLabel_->setStyleSheet("color:#ff5555;");
+    }
+    fileForm->addRow(tr("参考:"), refInfoLabel_);
 
     auto* distRow = new QHBoxLayout;
     distEdit_ = new QLineEdit;
@@ -115,7 +121,6 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
     layout->addWidget(log_, 1);
 
     // ---- 信号 ----
-    connect(refBtn, &QPushButton::clicked, this, &EvalTab::browseRef);
     connect(distBtn, &QPushButton::clicked, this, &EvalTab::browseDist);
     connect(startBtn_, &QPushButton::clicked, this, &EvalTab::startEval);
     connect(stopBtn_, &QPushButton::clicked, this, &EvalTab::stopEval);
@@ -134,7 +139,6 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
     });
 
     QSettings st("vmaf_tool");
-    refEdit_->setText(st.value("lastRef").toString());
     distEdit_->setText(st.value("lastDist").toString());
 }
 
@@ -143,13 +147,6 @@ EvalTab::~EvalTab() {
         worker_->requestStop();
         worker_->wait(5000);
     }
-}
-
-void EvalTab::browseRef() {
-    const QString f = QFileDialog::getOpenFileName(
-        this, tr("选择参考视频"), QString(), tr("视频 (*.mp4 *.mkv *.avi *.mov *.flv *.yuv);;所有文件 (*)"));
-    if (f.isEmpty()) return;
-    refEdit_->setText(f);
 }
 
 void EvalTab::browseDist() {
@@ -183,13 +180,18 @@ void EvalTab::setRunning(bool running) {
 }
 
 void EvalTab::startEval() {
-    if (refEdit_->text().isEmpty() || distEdit_->text().isEmpty()) {
-        QMessageBox::warning(this, tr("提示"), tr("请先选择参考视频和目标视频"));
+    if (refPath_.isEmpty()) {
+        QMessageBox::warning(this, tr("提示"),
+                             tr("未找到参考片源 %1, 请将其放在程序目录").arg(kRefSourceName));
+        return;
+    }
+    if (distEdit_->text().isEmpty()) {
+        QMessageBox::warning(this, tr("提示"), tr("请先选择目标视频或截图文件夹"));
         return;
     }
 
     vt::PipelineConfig cfg;
-    cfg.refPath = refEdit_->text().toStdString();
+    cfg.refPath = refPath_.toStdString();
     cfg.distPath = distEdit_->text().toStdString();
     cfg.yuvRefSize = cfg.yuvDistSize = yuvSizeEdit_->text().toStdString();
     cfg.vmaf.modelName = modelCombo_->currentData().toString() == "__custom"
@@ -197,12 +199,16 @@ void EvalTab::startEval() {
                              : modelCombo_->currentData().toString().toStdString();
     cfg.vmaf.threads = threadsSpin_->value();
 
+    // 采样模式 (目标为截图文件夹): 图表 x 轴 = 有效样本序号; 视频模式 = 参考帧号
+    samplingMode_ = QFileInfo(distEdit_->text()).isDir();
+    chart_->setXAxisTitle(samplingMode_ ? tr("有效样本") : tr("帧号"));
+
     QSettings st("vmaf_tool");
-    st.setValue("lastRef", refEdit_->text());
     st.setValue("lastDist", distEdit_->text());
 
     chart_->clear();
     entries_.clear();
+    sampleCount_ = 0;
     hasSummary_ = false;
     resultLabel_->setText(tr("评估中…"));
     appendLog("info", tr("开始评估"));
@@ -244,16 +250,22 @@ void EvalTab::onFrame(int /*idx*/, int refIdx, int distIdx, bool dropped, bool s
         FrameEntry e;
         e.refIdx = refIdx;
         e.distIdx = distIdx;
+        e.dropped = dropped;
         entries_.append(e);
-        chart_->appendFrame(0, dropped);
         pos = entries_.size() - 1;
+        // 丢帧不进图表; 有效样本以 -1 占位进图表 (分数延迟一帧回填)
+        if (!dropped) {
+            const int frameNo = samplingMode_ ? ++sampleCount_ : refIdx;
+            entries_[pos].chartIdx = chart_->frameCount();
+            chart_->appendFrame(-1, frameNo);
+        }
     }
     auto& e = entries_[pos];
     e.dropped = dropped;
     e.distIdx = distIdx;
     if (scoreValid) {
         e.score = score;
-        chart_->updateFrame(pos, score);
+        if (e.chartIdx >= 0) chart_->updateFrame(e.chartIdx, score);
         appendLog("info", tr("帧 %1 VMAF=%2").arg(refIdx).arg(score, 0, 'f', 2));
     }
 }
@@ -300,15 +312,15 @@ void EvalTab::onFinished(bool ok, const QString& error, double mean, double harm
 }
 
 void EvalTab::onChartFrameSelected(int idx) {
-    if (idx < 0 || idx >= entries_.size()) return;
-    const auto& e = entries_[idx];
-    if (e.dropped)
-        appendLog("warn", tr("查看帧 %1 (丢帧)").arg(e.refIdx));
-    else
+    // idx 为图表样本序号, 找到对应条目
+    for (const auto& e : entries_) {
+        if (e.chartIdx != idx) continue;
         appendLog("info", tr("查看帧 %1 → 目标帧 %2, VMAF=%3")
                               .arg(e.refIdx)
                               .arg(e.distIdx)
                               .arg(e.score, 0, 'f', 2));
+        return;
+    }
 }
 
 void EvalTab::exportJson() {
@@ -325,7 +337,7 @@ void EvalTab::exportJson() {
         frames.append(o);
     }
     QJsonObject root;
-    root["reference"] = refEdit_->text();
+    root["reference"] = refPath_;
     root["distorted"] = distEdit_->text();
     root["frames"] = frames;
     QFile file(f);

@@ -17,6 +17,9 @@ public:
     virtual double fps() const = 0;
     virtual int64_t totalFrames() const = 0; // 未知返回 -1
     virtual void close() = 0;
+    // 是否为图片序列输入 (image2 模式/截图文件夹): 是则为采样采集,
+    // 参考帧未被采到不代表丢帧
+    virtual bool isImageSequence() const { return false; }
 };
 
 // 基于 FFmpeg 的容器格式读取 (mp4/mkv/...), 统一输出 yuv420p 8bit

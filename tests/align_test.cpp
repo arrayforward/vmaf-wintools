@@ -185,15 +185,19 @@ RunResult runPipelineFull(const std::string& refPath, const std::string& distPat
 
 // 校验一次 pipeline 运行结果
 // refM: 参考侧每帧帧号真值, distM: 目标侧每帧帧号真值
+// sampling: 目标为截图采样序列 (未采到的参考帧不计丢帧, Summary.dropped 恒 0)
 void verifyRun(const char* tag, const RunResult& res, const std::vector<int>& refM,
-               const std::vector<int>& distM) {
+               const std::vector<int>& distM, bool sampling) {
     printf("[校验] %s\n", tag);
     const vt::Summary& s = res.summary;
 
-    bool markerAlignLogged = false;
-    for (const auto& l : res.logs)
+    bool markerAlignLogged = false, samplingLogged = false;
+    for (const auto& l : res.logs) {
         if (l.find("使用帧号对齐") != std::string::npos) markerAlignLogged = true;
+        if (l.find("截图采样序列") != std::string::npos) samplingLogged = true;
+    }
     CHECK(markerAlignLogged, "日志中未见帧号对齐生效");
+    CHECK(samplingLogged == sampling, "采样模式日志不符合预期 (sampling=%d)", sampling);
     CHECK(s.error.empty(), "pipeline 报错: %s", s.error.c_str());
     CHECK(s.ok, "pipeline 未完成评估");
 
@@ -220,7 +224,8 @@ void verifyRun(const char* tag, const RunResult& res, const std::vector<int>& re
         d = e;
     }
 
-    CHECK(s.dropped == expectedDropped, "丢帧数: 实际 %d, 期望 %d", s.dropped, expectedDropped);
+    CHECK(s.dropped == (sampling ? 0 : expectedDropped), "丢帧数: 实际 %d, 期望 %d", s.dropped,
+          sampling ? 0 : expectedDropped);
     CHECK(s.freezeSegments == expectedSegs, "冻结段数: 实际 %d, 期望 %d", s.freezeSegments,
           expectedSegs);
     CHECK(s.freezeMaxLen == expectedMaxLen, "最长冻结: 实际 %d, 期望 %d", s.freezeMaxLen,
@@ -237,8 +242,9 @@ void verifyRun(const char* tag, const RunResult& res, const std::vector<int>& re
           s.markerUnrecognized, refUnrec + distUnrec);
 
     // 逐帧映射正确率
-    int correct = 0, total = 0;
+    int correct = 0, total = 0, droppedEntries = 0;
     for (const auto& fr : s.frames) {
+        if (fr.dropped) ++droppedEntries;
         if (fr.refIdx < 0 || static_cast<size_t>(fr.refIdx) >= refM.size()) continue;
         if (refM[static_cast<size_t>(fr.refIdx)] < 0) continue; // 参考侧未识别的帧不校验
         ++total;
@@ -251,6 +257,8 @@ void verifyRun(const char* tag, const RunResult& res, const std::vector<int>& re
             printf("  [映射错误] 参考帧 %d -> 目标 %d, 期望 %d\n", fr.refIdx, fr.distIdx, exp);
         }
     }
+    // 采样模式下未采样的参考帧不应出现在帧列表里
+    if (sampling) CHECK(droppedEntries == 0, "采样模式仍存在 dropped 帧记录: %d", droppedEntries);
     printf("  映射正确率: %d/%d (%.1f%%)\n", correct, total,
            total > 0 ? 100.0 * correct / total : 0.0);
     CHECK(correct == total, "映射正确率未达 100%%");
@@ -307,7 +315,7 @@ int main(int argc, char** argv) {
 
     // ---- 3. 视频对视频: 帧号对齐 ----
     printf("==== 3. pipeline (视频 vs 视频) ====\n");
-    verifyRun("视频输入", runPipelineFull(refMarked, distSim), refM, distM);
+    verifyRun("视频输入", runPipelineFull(refMarked, distSim), refM, distM, false);
 
     // ---- 4. 截图文件夹输入 ----
     printf("==== 4. pipeline (视频 vs PNG 截图文件夹) ====\n");
@@ -323,7 +331,7 @@ int main(int argc, char** argv) {
     const std::vector<int> shotsM = scanMarkers(shotsDir);
     CHECK(shotsM == distM, "PNG 序列帧号与目标视频不一致 (%zu vs %zu 帧)", shotsM.size(),
           distM.size());
-    verifyRun("截图文件夹输入", runPipelineFull(refMarked, shotsDir), refM, distM);
+    verifyRun("截图文件夹输入", runPipelineFull(refMarked, shotsDir), refM, distM, true);
 
     printf("==== %s ====\n", g_fail == 0 ? "全部通过" : "存在失败");
     return g_fail == 0 ? 0 : 1;

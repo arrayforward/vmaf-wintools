@@ -66,6 +66,7 @@ set(GUI_SOURCES
     gui/capture_tab.h gui/capture_tab.cpp
     gui/preprocess_tab.h gui/preprocess_tab.cpp
     gui/worker.h gui/worker.cpp
+    gui/ref_source.h gui/ref_source.cpp
     gui/vmaf_chart_widget.h gui/vmaf_chart_widget.cpp
 )
 

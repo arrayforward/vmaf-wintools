@@ -1,4 +1,5 @@
 #include "main_window.h"
+#include "ref_source.h"
 
 #include "../core/pipeline.h"
 
@@ -41,26 +42,46 @@ static void convertWinArgs(int& argc, char**& argv) {
 }
 
 static int runCli(int argc, char* argv[]) {
-    // vmaf_tool --cli <ref> <dist> [--model name_or_path] [--yuv-size 1920x1080] [--threads N]
+    // vmaf_tool --cli [参考视频] <目标视频> [--model name_or_path] [--yuv-size 1920x1080]
+    //           [--threads N]
+    // 参考视频缺省时自动解析 ai_game_1080p60.mp4 (见 ref_source.h)
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 #endif
-    if (argc < 4) {
-        fprintf(stderr,
-                "用法: vmaf_tool --cli <参考视频> <目标视频> [--model 模型] "
-                "[--yuv-size 1920x1080] [--threads N]\n");
-        return 1;
-    }
     vt::PipelineConfig cfg;
-    cfg.refPath = argv[2];
-    cfg.distPath = argv[3];
-    for (int i = 4; i + 1 < argc; i += 2) {
+    std::vector<std::string> positional;
+    for (int i = 2; i < argc; ++i) {
         const std::string k = argv[i];
-        const std::string v = argv[i + 1];
+        if (k.rfind("--", 0) != 0) {
+            positional.push_back(k);
+            continue;
+        }
+        if (i + 1 >= argc) break;
+        const std::string v = argv[++i];
         if (k == "--model") cfg.vmaf.modelName = v;
         else if (k == "--yuv-size") { cfg.yuvRefSize = v; cfg.yuvDistSize = v; }
         else if (k == "--threads") cfg.vmaf.threads = atoi(v.c_str());
+    }
+    if (positional.size() == 2) {
+        cfg.refPath = positional[0];
+        cfg.distPath = positional[1];
+    } else if (positional.size() == 1) {
+        cfg.distPath = positional[0];
+    } else {
+        fprintf(stderr,
+                "用法: vmaf_tool --cli [参考视频] <目标视频> [--model 模型] "
+                "[--yuv-size 1920x1080] [--threads N]\n");
+        return 1;
+    }
+    if (cfg.refPath.empty()) {
+        const QString ref = resolveRefSource();
+        if (ref.isEmpty()) {
+            fprintf(stderr, "错误: 未找到参考片源 %s, 请将其放在程序目录\n", kRefSourceName);
+            return 1;
+        }
+        cfg.refPath = ref.toStdString();
+        printf("参考片源: %s\n", cfg.refPath.c_str());
     }
 
     vt::Pipeline pipeline;
