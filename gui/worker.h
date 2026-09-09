@@ -15,6 +15,15 @@ struct EvalFrameEntry {
 };
 Q_DECLARE_METATYPE(EvalFrameEntry)
 
+// 卡顿分析: 逐显示段结果 (与 vt::JankSegment 对应)
+struct JankSegEntry {
+    int frameIndex = -1;
+    double displayMs = 0;
+    qint64 startMs = 0;
+    bool jank = false, bigJank = false;
+};
+Q_DECLARE_METATYPE(JankSegEntry)
+
 class EvalWorker : public QThread {
     Q_OBJECT
 public:
@@ -38,4 +47,30 @@ protected:
 private:
     vt::PipelineConfig cfg_;
     vt::Pipeline pipeline_;
+};
+
+// 卡顿分析 worker: 逐帧 decodeMarker 收集帧号序列, 结束后 analyzeJank
+class JankWorker : public QThread {
+    Q_OBJECT
+public:
+    explicit JankWorker(QObject* parent = nullptr);
+
+    void configure(const QString& path);
+    void requestStop();
+
+signals:
+    void logMessage(const QString& level, const QString& msg);
+    void progressChanged(int done, int total);
+    // segs = JankReport.segments 全量 (逐显示段), 供事件列表与导出
+    void jankFinished(bool ok, const QString& error, double captureFps, double durationMs,
+                      int totalFrames, int unrecognized, double avgFrameMs, double maxFrameMs,
+                      int jankCount, int bigJankCount, double jankRate, double bigJankRate,
+                      double jankPer10Min, const QVector<JankSegEntry>& segs);
+
+protected:
+    void run() override;
+
+private:
+    std::string path_;
+    std::atomic<bool> stopRequested_{false};
 };

@@ -11,6 +11,8 @@ Windows 端按帧号精确对齐并做全参考 VMAF 打分(逐帧 + 池化统�
 - **评测**:QR 帧号精确对齐(天然处理丢帧/冻结/乱序/帧率不一致)
   + QR 外接框反推视频区域自动裁剪(含黑边吸附细化)
   + libvmaf 打分;丢帧/冻结由帧号映射单独统计
+- **卡顿分析**:对播放画面的录屏逐帧解帧号,按 PerfDog 标准统计
+  Jank/Big Jank 次数、卡顿率、Jank/10min(GUI 卡顿分析 Tab / jank_cli)
 - **参考免选择**:评测只需选目标(截图文件夹或录屏),参考片源自动解析 `ai_game_1080p60.mp4`
 
 ## 快速上手
@@ -21,6 +23,8 @@ Windows 端按帧号精确对齐并做全参考 VMAF 打分(逐帧 + 池化统�
 3. **采集**:vmaf_tool 的"采集"Tab 经 adb 定时截图(输出 PNG 序列文件夹),或端侧录屏
 4. **评测**:vmaf_tool 的"画质评估"Tab 选目标(截图文件夹/录屏)开始评估;
    对齐与裁剪全自动,完成后可导出 JSON/CSV
+5. **卡顿分析**(可选):vmaf_tool 的"卡顿分析"Tab 选录屏视频,按 PerfDog 标准输出
+   Jank/Big Jank/卡顿率,可导出 CSV
 
 ```bat
 :: GUI
@@ -31,6 +35,9 @@ vmaf_tool.exe --cli [参考视频] <目标视频或截图文件夹> [--model 模
 
 :: 独立命令行 (帧号对齐 + 自动裁剪)
 eval_cli.exe <ref视频> <dist视频或截图文件夹> [model路径]
+
+:: 卡顿率分析 (PerfDog 标准)
+jank_cli.exe <录屏视频> [--export-csv out.csv]
 ```
 
 ## 目录结构
@@ -38,8 +45,8 @@ eval_cli.exe <ref视频> <dist视频或截图文件夹> [model路径]
 | 目录 | 说明 |
 |---|---|
 | `core/` | 核心库(纯 C++,无 Qt 依赖):解码、QR 帧号、对齐、自动裁剪、libvmaf 封装、Pipeline |
-| `gui/` | Qt6 桌面端:采集 / 画质评估 / 视频预处理 三个 Tab |
-| `tools/` | `eval_cli`(命令行评测)、`marker_burn`(片源烧码/校验) |
+| `gui/` | Qt6 桌面端:采集 / 卡顿分析 / 画质评估 / 视频预处理 四个 Tab |
+| `tools/` | `eval_cli`(命令行评测)、`marker_burn`(片源烧码/校验)、`jank_cli`(卡顿率分析) |
 | `android_player/` | 云侧测试片源播放器(Android APK) |
 | `models/` | VMAF 模型 JSON(随 exe 分发) |
 | `docs/` | 架构/流程/使用/交互/帧号标记规范文档 |

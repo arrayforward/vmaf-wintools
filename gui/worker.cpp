@@ -1,5 +1,9 @@
 #include "worker.h"
 
+#include "../core/jank.h"
+#include "../core/marker.h"
+#include "../core/video_reader.h"
+
 EvalWorker::EvalWorker(QObject* parent) : QThread(parent) {
     qRegisterMetaType<QVector<EvalFrameEntry>>();
 }
@@ -29,4 +33,77 @@ void EvalWorker::run() {
     };
 
     pipeline_.run(cfg_, cb);
+}
+
+// ---- JankWorker ----
+
+JankWorker::JankWorker(QObject* parent) : QThread(parent) {
+    qRegisterMetaType<QVector<JankSegEntry>>();
+}
+
+void JankWorker::configure(const QString& path) { path_ = path.toStdString(); }
+
+void JankWorker::requestStop() { stopRequested_.store(true); }
+
+void JankWorker::run() {
+    QVector<JankSegEntry> segs;
+    auto finish = [&](bool ok, const QString& error, const vt::JankReport& rep) {
+        emit jankFinished(ok, error, rep.captureFps, rep.durationMs, rep.totalFrames,
+                          rep.unrecognized, rep.avgFrameMs, rep.maxFrameMs, rep.jankCount,
+                          rep.bigJankCount, rep.jankRate, rep.bigJankRate, rep.jankPer10Min, segs);
+    };
+
+    std::string err;
+    auto reader = vt::createReader(path_, "", 0.0, err);
+    if (!reader || !reader->open(err)) {
+        finish(false, QString::fromStdString(err), {});
+        return;
+    }
+    const double fps = reader->fps();
+    const int64_t total = reader->totalFrames();
+    emit logMessage("info", tr("录屏: %1x%2 @ %3fps")
+                              .arg(reader->width())
+                              .arg(reader->height())
+                              .arg(fps, 0, 'f', 2));
+
+    // 逐帧解码 QR 帧号 (-1 = 未识别)
+    std::vector<int> indices;
+    vt::Frame f;
+    while (!stopRequested_.load() && reader->readFrame(f)) {
+        vt::MarkerInfo mi;
+        if (vt::decodeMarker(f, mi) && mi.valid)
+            indices.push_back(mi.frameIndex);
+        else
+            indices.push_back(-1);
+        if (indices.size() % 30 == 0)
+            emit progressChanged(static_cast<int>(indices.size()),
+                                 total > 0 ? static_cast<int>(total) : 0);
+    }
+    reader->close();
+
+    if (stopRequested_.load()) {
+        finish(false, tr("已取消"), {});
+        return;
+    }
+    if (indices.empty()) {
+        finish(false, tr("视频无帧"), {});
+        return;
+    }
+    // 识别率过低: 不是烧码片源录制
+    int valid = 0;
+    for (const int v : indices)
+        if (v >= 0) ++valid;
+    if (valid * 5 < static_cast<int>(indices.size()) * 4) {
+        finish(false, tr("该视频未检测到足够的帧号标记 (识别率 %1%, 需 >= 80%), "
+                         "请确认录屏内容为 marker_burn 烧码片源")
+                          .arg(100.0 * valid / indices.size(), 0, 'f', 1),
+               {});
+        return;
+    }
+
+    const vt::JankReport rep = vt::analyzeJank(indices, fps);
+    segs.reserve(static_cast<int>(rep.segments.size()));
+    for (const auto& s : rep.segments)
+        segs.append({s.frameIndex, s.displayMs, s.startMs, s.jank, s.bigJank});
+    finish(true, QString(), rep);
 }

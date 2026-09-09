@@ -2,6 +2,7 @@
 
 #include "capture_tab.h"
 #include "eval_tab.h"
+#include "jank_tab.h"
 #include "preprocess_tab.h"
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -11,6 +12,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* evalTab = new EvalTab(this);
     auto* captureTab = new CaptureTab(this);
     tabs_->addTab(captureTab, tr("采集"));
+    tabs_->addTab(new JankTab(this), tr("卡顿分析"));
     tabs_->addTab(evalTab, tr("画质评估"));
     tabs_->addTab(new PreprocessTab(this), tr("视频预处理 (绿屏/转码)"));
     setCentralWidget(tabs_);

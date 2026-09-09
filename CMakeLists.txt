@@ -46,6 +46,7 @@ set(CORE_SOURCES
     core/frame_aligner.h core/frame_aligner.cpp
     core/pipeline.h core/pipeline.cpp
     core/marker.h core/marker.cpp
+    core/jank.h core/jank.cpp
 )
 
 # ---- third_party: 帧号 QR 标记 ----
@@ -64,6 +65,7 @@ set(GUI_SOURCES
     gui/main_window.h gui/main_window.cpp
     gui/eval_tab.h gui/eval_tab.cpp
     gui/capture_tab.h gui/capture_tab.cpp
+    gui/jank_tab.h gui/jank_tab.cpp
     gui/preprocess_tab.h gui/preprocess_tab.cpp
     gui/worker.h gui/worker.cpp
     gui/ref_source.h gui/ref_source.cpp
@@ -187,4 +189,21 @@ target_link_libraries(marker_burn PRIVATE
 add_custom_command(TARGET marker_burn POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} ${FFMPEG_EXES}
             $<TARGET_FILE_DIR:marker_burn>
+)
+
+# ---- 工具: 录屏卡顿率分析 (PerfDog 标准) ----
+add_executable(jank_cli
+    tools/jank_cli.cpp
+    core/frame.cpp core/marker.cpp core/video_reader.cpp core/yuv_reader.cpp core/jank.cpp
+    ${QRCODEGEN_SOURCES} ${QUIRC_SOURCES}
+)
+target_include_directories(jank_cli PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(jank_cli PRIVATE
+    ${AVFORMAT_LIB}
+    ${AVCODEC_LIB}
+    ${AVUTIL_LIB}
+    ${SWSCALE_LIB}
 )
