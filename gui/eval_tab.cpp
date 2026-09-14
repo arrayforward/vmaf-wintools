@@ -22,6 +22,7 @@
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QSettings>
 #include <QSpinBox>
 #include <QTextStream>
@@ -98,7 +99,16 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
     ctrlRow->addWidget(progress_, 1);
     layout->addLayout(ctrlRow);
 
-    // ---- 曲线 ----
+    // ---- 曲线 (VMAF / PSNR 切换) ----
+    auto* chartRow = new QHBoxLayout;
+    vmafRadio_ = new QRadioButton("VMAF");
+    psnrRadio_ = new QRadioButton("PSNR");
+    vmafRadio_->setChecked(true);
+    chartRow->addWidget(new QLabel(tr("曲线:")));
+    chartRow->addWidget(vmafRadio_);
+    chartRow->addWidget(psnrRadio_);
+    chartRow->addStretch();
+    layout->addLayout(chartRow);
     chart_ = new VmafChartWidget;
     layout->addWidget(chart_, 1);
 
@@ -127,6 +137,8 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
     connect(exportJsonBtn_, &QPushButton::clicked, this, &EvalTab::exportJson);
     connect(exportCsvBtn_, &QPushButton::clicked, this, &EvalTab::exportCsv);
     connect(chart_, &VmafChartWidget::frameSelected, this, &EvalTab::onChartFrameSelected);
+    connect(vmafRadio_, &QRadioButton::toggled, this, &EvalTab::rebuildChart);
+    connect(psnrRadio_, &QRadioButton::toggled, this, &EvalTab::rebuildChart);
 
     connect(modelCombo_, &QComboBox::currentIndexChanged, this, [this] {
         const bool custom = modelCombo_->currentData().toString() == "__custom";
@@ -235,7 +247,7 @@ void EvalTab::onProgress(int done, int total) {
 }
 
 void EvalTab::onFinished(bool ok, const QString& error, double mean, double harmonic, double minS,
-                         double maxS, int matched, int dropped, int frozen,
+                         double maxS, double psnrMean, int matched, int dropped, int frozen,
                          int markerUnrecognized, double markerCoverage, int freezeSegments,
                          int freezeMaxLen, const QVector<EvalFrameEntry>& frames) {
     setRunning(false);
@@ -247,6 +259,7 @@ void EvalTab::onFinished(bool ok, const QString& error, double mean, double harm
         lastSummary_.harmonicMean = harmonic;
         lastSummary_.minScore = minS;
         lastSummary_.maxScore = maxS;
+        lastSummary_.psnrMean = psnrMean;
         lastSummary_.matched = matched;
         lastSummary_.dropped = dropped;
         lastSummary_.frozen = frozen;
@@ -257,11 +270,12 @@ void EvalTab::onFinished(bool ok, const QString& error, double mean, double harm
         const double dropRate = matched + dropped > 0
                                     ? 100.0 * dropped / (matched + dropped)
                                     : 0.0;
-        QString text = tr("VMAF mean=%1  harmonic=%2  min=%3  max=%4  |  匹配 %5 帧  丢帧 %6 (%7%)  冻结帧 %8")
+        QString text = tr("VMAF mean=%1  harmonic=%2  min=%3  max=%4  PSNR mean=%5 dB  |  匹配 %6 帧  丢帧 %7 (%8%)  冻结帧 %9")
                            .arg(mean, 0, 'f', 2)
                            .arg(harmonic, 0, 'f', 2)
                            .arg(minS, 0, 'f', 2)
                            .arg(maxS, 0, 'f', 2)
+                           .arg(psnrMean, 0, 'f', 2)
                            .arg(matched)
                            .arg(dropped)
                            .arg(dropRate, 0, 'f', 1)
@@ -275,18 +289,7 @@ void EvalTab::onFinished(bool ok, const QString& error, double mean, double harm
                         .arg(freezeMaxLen);
         }
         resultLabel_->setText(text);
-
-        // 图表在评测结束时从全量结果重建 (该 libvmaf 构建 flush 前不可取分,
-        // 过程中没有分数可画): 只画 scoreValid 的有效样本, 折线连接相邻样本
-        chart_->clear();
-        chartToFinal_.clear();
-        int sampleNo = 0;
-        for (int i = 0; i < finalFrames_.size(); ++i) {
-            const auto& e = finalFrames_[i];
-            if (e.dropped || !e.scoreValid) continue;
-            chartToFinal_.append(i);
-            chart_->appendFrame(e.score, samplingMode_ ? ++sampleNo : e.refIdx);
-        }
+        rebuildChart();
 
         exportJsonBtn_->setEnabled(true);
         exportCsvBtn_->setEnabled(true);
@@ -301,14 +304,32 @@ void EvalTab::onFinished(bool ok, const QString& error, double mean, double harm
     }
 }
 
+void EvalTab::rebuildChart() {
+    // 图表从全量结果重建 (该 libvmaf 构建 flush 前不可取分, 过程中没有分数可画):
+    // 只画指标有效的样本, 折线连接相邻样本; x 轴: 采样模式样本序号 / 视频模式帧号
+    const bool showPsnr = psnrRadio_->isChecked();
+    chart_->setYAxisTitle(showPsnr ? "dB" : "VMAF");
+    chart_->clear();
+    chartToFinal_.clear();
+    int sampleNo = 0;
+    for (int i = 0; i < finalFrames_.size(); ++i) {
+        const auto& e = finalFrames_[i];
+        const double v = showPsnr ? e.psnr : (e.scoreValid ? e.score : -1.0);
+        if (e.dropped || v < 0) continue;
+        chartToFinal_.append(i);
+        chart_->appendFrame(v, samplingMode_ ? ++sampleNo : e.refIdx);
+    }
+}
+
 void EvalTab::onChartFrameSelected(int idx) {
     // idx 为图表样本序号, 经 chartToFinal_ 反查 finalFrames_
     if (idx < 0 || idx >= chartToFinal_.size()) return;
     const auto& e = finalFrames_[chartToFinal_[idx]];
-    appendLog("info", tr("查看帧 %1 → 目标帧 %2, VMAF=%3")
+    appendLog("info", tr("查看帧 %1 → 目标帧 %2, VMAF=%3, PSNR=%4 dB")
                           .arg(e.refIdx)
                           .arg(e.distIdx)
-                          .arg(e.score, 0, 'f', 2));
+                          .arg(e.score, 0, 'f', 2)
+                          .arg(e.psnr, 0, 'f', 2));
 }
 
 void EvalTab::exportJson() {
@@ -325,6 +346,7 @@ void EvalTab::exportJson() {
         if (!e.dropped) {
             o["dist_frame"] = e.distIdx;
             if (e.scoreValid) o["vmaf"] = e.score;
+            if (e.psnr >= 0) o["psnr"] = e.psnr;
         }
         frames.append(o);
     }
@@ -333,6 +355,7 @@ void EvalTab::exportJson() {
     sum["harmonic_mean"] = lastSummary_.harmonicMean;
     sum["min"] = lastSummary_.minScore;
     sum["max"] = lastSummary_.maxScore;
+    sum["psnr_mean"] = lastSummary_.psnrMean;
     sum["matched"] = lastSummary_.matched;
     sum["dropped"] = lastSummary_.dropped;
     sum["frozen"] = lastSummary_.frozen;
@@ -356,12 +379,14 @@ void EvalTab::exportCsv() {
     QFile file(f);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
     QTextStream ts(&file);
-    ts << "ref_frame,dist_frame,vmaf,status\n";
+    ts << "ref_frame,dist_frame,vmaf,psnr,status\n";
     for (const auto& e : finalFrames_) {
         ts << e.refIdx << ',';
         if (!e.dropped) ts << e.distIdx;
         ts << ',';
         if (!e.dropped && e.scoreValid) ts << QString::number(e.score, 'f', 4);
+        ts << ',';
+        if (!e.dropped && e.psnr >= 0) ts << QString::number(e.psnr, 'f', 4);
         ts << ',' << (e.dropped ? "dropped" : "matched") << '\n';
     }
 }

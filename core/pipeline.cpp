@@ -51,6 +51,24 @@ struct CropRect {
     int x = 0, y = 0, w = 0, h = 0;
 };
 
+// Y 平面 PSNR (dB): MSE = mean((a-b)^2), PSNR = 10*log10(255^2/MSE)
+// MSE = 0 (两帧完全相同) 时记 99.99 封顶 (避免 inf, 与常见工程惯例一致)
+double computePsnrY(const Frame& a, const Frame& b) {
+    if (!a.valid() || !b.valid() || a.width != b.width || a.height != b.height) return -1.0;
+    double mse = 0;
+    for (int r = 0; r < a.height; ++r) {
+        const uint8_t* pa = a.y.data() + static_cast<size_t>(r) * a.strideY;
+        const uint8_t* pb = b.y.data() + static_cast<size_t>(r) * b.strideY;
+        for (int c = 0; c < a.width; ++c) {
+            const int d = static_cast<int>(pa[c]) - static_cast<int>(pb[c]);
+            mse += static_cast<double>(d) * d;
+        }
+    }
+    mse /= static_cast<double>(a.width) * a.height;
+    if (mse <= 0.0) return 99.99;
+    return 10.0 * std::log10(255.0 * 255.0 / mse);
+}
+
 // 偶数对齐 + 边界裁剪, 保证与 VMAF 初始化尺寸严格一致
 CropRect normalizeCrop(CropRect r, int w, int h) {
     r.x &= ~1;
@@ -436,6 +454,9 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
         if (dc2.width != cmpW || dc2.height != cmpH)
             dc2 = scaleFrame(dc2, cmpW, cmpH);
 
+        // PSNR 与喂给 VMAF 的帧完全一致 (裁剪 + 统一比较分辨率之后)
+        fr.psnr = computePsnrY(rc2, dc2);
+
         if (!vmaf.pushFramePair(rc2, dc2, err)) {
             summary.error = err;
             break;
@@ -501,6 +522,19 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
         summary.error = "分数池化失败";
         if (cb.onFinished) cb.onFinished(summary);
         return;
+    }
+
+    // PSNR 均值 (全部有效样本)
+    {
+        double sum = 0;
+        int n = 0;
+        for (const auto& fr : summary.frames) {
+            if (!fr.dropped && fr.psnr >= 0) {
+                sum += fr.psnr;
+                ++n;
+            }
+        }
+        summary.psnrMean = n > 0 ? sum / n : -1.0;
     }
 
     summary.ok = true;

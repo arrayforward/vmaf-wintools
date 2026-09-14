@@ -41,6 +41,11 @@ void VmafChartWidget::setXAxisTitle(const QString& title) {
     update();
 }
 
+void VmafChartWidget::setYAxisTitle(const QString& title) {
+    yTitle_ = title;
+    update();
+}
+
 QRectF VmafChartWidget::plotArea() const {
     return QRectF(40, 10, width() - 50, height() - 35);
 }
@@ -70,6 +75,10 @@ void VmafChartWidget::paintEvent(QPaintEvent*) {
         p.setPen(QColor(160, 160, 160));
         p.drawText(QRectF(0, y - 8, 34, 16), Qt::AlignRight | Qt::AlignVCenter, QString::number(s));
         p.setPen(QColor(70, 70, 75));
+    }
+    if (!yTitle_.isEmpty()) {
+        p.setPen(QColor(160, 160, 160));
+        p.drawText(QRectF(a.left() + 4, a.top(), 120, 16), yTitle_);
     }
 
     if (scores_.isEmpty()) {

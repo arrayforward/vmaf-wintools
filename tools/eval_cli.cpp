@@ -58,11 +58,11 @@ bool exportJson(const std::string& path, const vt::PipelineConfig& cfg, const vt
             jsonEscape(cfg.refPath).c_str(), jsonEscape(cfg.distPath).c_str());
     fprintf(f,
             "  \"summary\": {\"mean\": %.4f, \"harmonic_mean\": %.4f, \"min\": %.4f, "
-            "\"max\": %.4f, \"matched\": %d, \"dropped\": %d, \"frozen\": %d, "
+            "\"max\": %.4f, \"psnr_mean\": %.4f, \"matched\": %d, \"dropped\": %d, \"frozen\": %d, "
             "\"freeze_segments\": %d, \"freeze_max_len\": %d, \"marker_unrecognized\": %d, "
             "\"marker_coverage\": %.4f},\n",
-            s.mean, s.harmonicMean, s.minScore, s.maxScore, s.matched, s.dropped, s.frozen,
-            s.freezeSegments, s.freezeMaxLen, s.markerUnrecognized, s.markerCoverage);
+            s.mean, s.harmonicMean, s.minScore, s.maxScore, s.psnrMean, s.matched, s.dropped,
+            s.frozen, s.freezeSegments, s.freezeMaxLen, s.markerUnrecognized, s.markerCoverage);
     fprintf(f, "  \"frames\": [\n");
     for (size_t i = 0; i < s.frames.size(); ++i) {
         const auto& fr = s.frames[i];
@@ -72,6 +72,7 @@ bool exportJson(const std::string& path, const vt::PipelineConfig& cfg, const vt
         } else {
             fprintf(f, "\"dist_frame\": %d, ", fr.distIdx);
             if (fr.scoreValid) fprintf(f, "\"vmaf\": %.4f, ", fr.score);
+            if (fr.psnr >= 0) fprintf(f, "\"psnr\": %.4f, ", fr.psnr);
             fprintf(f, "\"status\": \"matched\"}");
         }
         fprintf(f, "%s\n", i + 1 < s.frames.size() ? "," : "");
@@ -81,16 +82,18 @@ bool exportJson(const std::string& path, const vt::PipelineConfig& cfg, const vt
     return true;
 }
 
-// CSV 列: ref_frame,dist_frame,vmaf,status
+// CSV 列: ref_frame,dist_frame,vmaf,psnr,status
 bool exportCsv(const std::string& path, const vt::Summary& s) {
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) return false;
-    fprintf(f, "ref_frame,dist_frame,vmaf,status\n");
+    fprintf(f, "ref_frame,dist_frame,vmaf,psnr,status\n");
     for (const auto& fr : s.frames) {
         fprintf(f, "%d,", fr.refIdx);
         if (!fr.dropped) fprintf(f, "%d", fr.distIdx);
         fprintf(f, ",");
         if (!fr.dropped && fr.scoreValid) fprintf(f, "%.4f", fr.score);
+        fprintf(f, ",");
+        if (!fr.dropped && fr.psnr >= 0) fprintf(f, "%.4f", fr.psnr);
         fprintf(f, ",%s\n", fr.dropped ? "dropped" : "matched");
     }
     fclose(f);
@@ -148,6 +151,7 @@ int main(int argc, char** argv) {
         printf("错误: %s\n", summary.error.c_str());
     printf("VMAF mean=%.4f harmonic=%.4f min=%.4f max=%.4f\n", summary.mean, summary.harmonicMean,
            summary.minScore, summary.maxScore);
+    printf("PSNR mean=%.2f dB\n", summary.psnrMean);
     printf("匹配 %d 对, 丢帧 %d, 冻结重复 %d, 冻结段 %d, 最长冻结 %d 帧\n", summary.matched,
            summary.dropped, summary.frozen, summary.freezeSegments, summary.freezeMaxLen);
     printf("帧号: 未识别 %d 帧, 参考覆盖率 %.1f%%\n", summary.markerUnrecognized,

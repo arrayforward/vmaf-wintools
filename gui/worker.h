@@ -12,6 +12,7 @@ struct EvalFrameEntry {
     bool dropped = false;
     bool scoreValid = false;
     double score = 0;
+    double psnr = -1.0; // -1 = 无效
 };
 Q_DECLARE_METATYPE(EvalFrameEntry)
 
@@ -37,7 +38,7 @@ signals:
     void progressChanged(int done, int total);
     // frames = Summary.frames 全量 (含 flush 后补齐的分数), 供导出与图表重建
     void evalFinished(bool ok, const QString& error, double mean, double harmonic, double minS,
-                      double maxS, int matched, int dropped, int frozen,
+                      double maxS, double psnrMean, int matched, int dropped, int frozen,
                       int markerUnrecognized, double markerCoverage, int freezeSegments,
                       int freezeMaxLen, const QVector<EvalFrameEntry>& frames);
 

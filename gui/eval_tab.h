@@ -14,6 +14,7 @@ class QPushButton;
 class QProgressBar;
 class QPlainTextEdit;
 class QLabel;
+class QRadioButton;
 class VmafChartWidget;
 
 class EvalTab : public QWidget {
@@ -36,10 +37,11 @@ private slots:
     void onLog(const QString& level, const QString& msg);
     void onProgress(int done, int total);
     void onFinished(bool ok, const QString& error, double mean, double harmonic, double minS,
-                    double maxS, int matched, int dropped, int frozen, int markerUnrecognized,
-                    double markerCoverage, int freezeSegments, int freezeMaxLen,
-                    const QVector<EvalFrameEntry>& frames);
+                    double maxS, double psnrMean, int matched, int dropped, int frozen,
+                    int markerUnrecognized, double markerCoverage, int freezeSegments,
+                    int freezeMaxLen, const QVector<EvalFrameEntry>& frames);
     void onChartFrameSelected(int idx);
+    void rebuildChart(); // VMAF/PSNR 切换时从 finalFrames_ 重画
 
 private:
     void appendLog(const QString& level, const QString& msg);
@@ -57,6 +59,8 @@ private:
     QPushButton* stopBtn_;
     QProgressBar* progress_;
     VmafChartWidget* chart_;
+    QRadioButton* vmafRadio_;
+    QRadioButton* psnrRadio_;
     QPlainTextEdit* log_;
     QLabel* resultLabel_;
     QPushButton* exportJsonBtn_;

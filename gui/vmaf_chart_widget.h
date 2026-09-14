@@ -16,6 +16,7 @@ public:
     void updateFrame(int idx, double score); // 补充分数
     void setCurrentFrame(int idx);
     void setXAxisTitle(const QString& title); // x 轴语义标注
+    void setYAxisTitle(const QString& title); // y 轴单位标注 (如 "VMAF" / "dB")
     int frameCount() const { return scores_.size(); }
     double scoreAt(int idx) const { return scores_.value(idx, -1); }
 
@@ -36,6 +37,7 @@ private:
     QVector<double> scores_;   // -1 = 分数未就绪 (延迟一帧回填)
     QVector<int> frameNos_;    // 每个样本的 x 轴标注值
     QString xTitle_;
+    QString yTitle_;
     int current_ = -1;
     double viewStart_ = 0; // 可见起始帧
     double viewSpan_ = 0;  // 可见帧数, 0 = 全部
