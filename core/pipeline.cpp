@@ -51,22 +51,47 @@ struct CropRect {
     int x = 0, y = 0, w = 0, h = 0;
 };
 
-// Y 平面 PSNR (dB): MSE = mean((a-b)^2), PSNR = 10*log10(255^2/MSE)
-// MSE = 0 (两帧完全相同) 时记 99.99 封顶 (避免 inf, 与常见工程惯例一致)
-double computePsnrY(const Frame& a, const Frame& b) {
-    if (!a.valid() || !b.valid() || a.width != b.width || a.height != b.height) return -1.0;
+// 全平面 PSNR 结果 (dB), -1 = 无效
+struct PsnrResult {
+    double y = -1, u = -1, v = -1, avg = -1;
+};
+
+double planeMse(const uint8_t* pa, int strideA, const uint8_t* pb, int strideB, int w, int h) {
     double mse = 0;
-    for (int r = 0; r < a.height; ++r) {
-        const uint8_t* pa = a.y.data() + static_cast<size_t>(r) * a.strideY;
-        const uint8_t* pb = b.y.data() + static_cast<size_t>(r) * b.strideY;
-        for (int c = 0; c < a.width; ++c) {
-            const int d = static_cast<int>(pa[c]) - static_cast<int>(pb[c]);
+    for (int r = 0; r < h; ++r) {
+        const uint8_t* ra = pa + static_cast<size_t>(r) * strideA;
+        const uint8_t* rb = pb + static_cast<size_t>(r) * strideB;
+        for (int c = 0; c < w; ++c) {
+            const int d = static_cast<int>(ra[c]) - static_cast<int>(rb[c]);
             mse += static_cast<double>(d) * d;
         }
     }
-    mse /= static_cast<double>(a.width) * a.height;
-    if (mse <= 0.0) return 99.99;
+    return mse / (static_cast<double>(w) * h);
+}
+
+double mseToPsnr(double mse) {
+    if (mse <= 0.0) return 99.99; // 完全相同封顶 (避免 inf, 工程惯例)
     return 10.0 * std::log10(255.0 * 255.0 / mse);
+}
+
+// Y/U/V 全平面 PSNR: 各平面独立 MSE/PSNR (MSE=0 封顶 99.99);
+// avg 用各平面真实 MSE 按像素数加权 ((mse_y*wh + mse_u*wh/4 + mse_v*wh/4) / (1.5*wh)),
+// 与 ffmpeg psnr 滤镜的 average 口径一致 (封顶值不参与加权)
+PsnrResult computePsnr(const Frame& a, const Frame& b) {
+    PsnrResult pr;
+    if (!a.valid() || !b.valid() || a.width != b.width || a.height != b.height) return pr;
+    const int w = a.width, h = a.height;
+    const int cw = w / 2, ch = h / 2;
+    const double mseY = planeMse(a.y.data(), a.strideY, b.y.data(), b.strideY, w, h);
+    const double mseU = planeMse(a.u.data(), a.strideU, b.u.data(), b.strideU, cw, ch);
+    const double mseV = planeMse(a.v.data(), a.strideV, b.v.data(), b.strideV, cw, ch);
+    pr.y = mseToPsnr(mseY);
+    pr.u = mseToPsnr(mseU);
+    pr.v = mseToPsnr(mseV);
+    const double mseAvg = (mseY * w * h + mseU * cw * ch + mseV * cw * ch) /
+                          (static_cast<double>(w) * h + 2.0 * cw * ch);
+    pr.avg = mseToPsnr(mseAvg);
+    return pr;
 }
 
 // 偶数对齐 + 边界裁剪, 保证与 VMAF 初始化尺寸严格一致
@@ -455,7 +480,11 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
             dc2 = scaleFrame(dc2, cmpW, cmpH);
 
         // PSNR 与喂给 VMAF 的帧完全一致 (裁剪 + 统一比较分辨率之后)
-        fr.psnr = computePsnrY(rc2, dc2);
+        const PsnrResult pr = computePsnr(rc2, dc2);
+        fr.psnr = pr.avg;
+        fr.psnrY = pr.y;
+        fr.psnrU = pr.u;
+        fr.psnrV = pr.v;
 
         if (!vmaf.pushFramePair(rc2, dc2, err)) {
             summary.error = err;

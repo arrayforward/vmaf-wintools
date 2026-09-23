@@ -28,7 +28,8 @@ struct FrameResult {
     bool dropped = false;
     bool scoreValid = false;
     double score = 0;
-    double psnr = -1.0; // Y 平面 PSNR (dB), -1 = 无效
+    double psnr = -1.0; // PSNR 加权平均 (Y/U/V 按像素数加权, 同 ffmpeg psnr average 口径)
+    double psnrY = -1.0, psnrU = -1.0, psnrV = -1.0; // 各平面 PSNR (dB), -1 = 无效
     // RGB24 缩略图 (可能为空)
     std::vector<uint8_t> rgbRef, rgbDist;
     int thumbW = 0, thumbH = 0;
@@ -44,7 +45,7 @@ struct Summary {
     int freezeSegments = 0;     // 目标侧连续重复帧号的段数
     int freezeMaxLen = 0;       // 最长冻结段长度 (帧)
     double mean = 0, harmonicMean = 0, minScore = 0, maxScore = 0;
-    double psnrMean = -1.0; // 全部有效样本的 Y-PSNR 均值 (dB), 无有效样本为 -1
+    double psnrMean = -1.0; // 全部有效样本的 PSNR 加权平均口径均值 (dB), 无有效样本为 -1
     std::vector<FrameResult> frames; // 不含 rgb (内存考虑)
     bool ok = false;
     std::string error;

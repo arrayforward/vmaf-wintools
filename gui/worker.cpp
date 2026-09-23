@@ -25,7 +25,8 @@ void EvalWorker::run() {
         QVector<EvalFrameEntry> frames;
         frames.reserve(static_cast<int>(s.frames.size()));
         for (const auto& fr : s.frames)
-            frames.append({fr.refIdx, fr.distIdx, fr.dropped, fr.scoreValid, fr.score, fr.psnr});
+            frames.append({fr.refIdx, fr.distIdx, fr.dropped, fr.scoreValid, fr.score, fr.psnr,
+                           fr.psnrY, fr.psnrU, fr.psnrV});
         emit evalFinished(s.ok, QString::fromStdString(s.error), s.mean, s.harmonicMean,
                           s.minScore, s.maxScore, s.psnrMean, s.matched, s.dropped, s.frozen,
                           s.markerUnrecognized, s.markerCoverage, s.freezeSegments,

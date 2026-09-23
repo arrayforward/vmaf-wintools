@@ -72,7 +72,11 @@ bool exportJson(const std::string& path, const vt::PipelineConfig& cfg, const vt
         } else {
             fprintf(f, "\"dist_frame\": %d, ", fr.distIdx);
             if (fr.scoreValid) fprintf(f, "\"vmaf\": %.4f, ", fr.score);
-            if (fr.psnr >= 0) fprintf(f, "\"psnr\": %.4f, ", fr.psnr);
+            if (fr.psnr >= 0) { // psnr 为 Y/U/V 加权平均口径
+                fprintf(f, "\"psnr\": %.4f, \"psnr_y\": %.4f, \"psnr_u\": %.4f, "
+                           "\"psnr_v\": %.4f, ",
+                        fr.psnr, fr.psnrY, fr.psnrU, fr.psnrV);
+            }
             fprintf(f, "\"status\": \"matched\"}");
         }
         fprintf(f, "%s\n", i + 1 < s.frames.size() ? "," : "");
@@ -82,18 +86,21 @@ bool exportJson(const std::string& path, const vt::PipelineConfig& cfg, const vt
     return true;
 }
 
-// CSV 列: ref_frame,dist_frame,vmaf,psnr,status
+// CSV 列: ref_frame,dist_frame,vmaf,psnr_avg,psnr_y,psnr_u,psnr_v,status
 bool exportCsv(const std::string& path, const vt::Summary& s) {
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) return false;
-    fprintf(f, "ref_frame,dist_frame,vmaf,psnr,status\n");
+    fprintf(f, "ref_frame,dist_frame,vmaf,psnr_avg,psnr_y,psnr_u,psnr_v,status\n");
     for (const auto& fr : s.frames) {
         fprintf(f, "%d,", fr.refIdx);
         if (!fr.dropped) fprintf(f, "%d", fr.distIdx);
         fprintf(f, ",");
         if (!fr.dropped && fr.scoreValid) fprintf(f, "%.4f", fr.score);
         fprintf(f, ",");
-        if (!fr.dropped && fr.psnr >= 0) fprintf(f, "%.4f", fr.psnr);
+        if (!fr.dropped && fr.psnr >= 0)
+            fprintf(f, "%.4f,%.4f,%.4f,%.4f", fr.psnr, fr.psnrY, fr.psnrU, fr.psnrV);
+        else
+            fprintf(f, ",,,");
         fprintf(f, ",%s\n", fr.dropped ? "dropped" : "matched");
     }
     fclose(f);
@@ -151,7 +158,7 @@ int main(int argc, char** argv) {
         printf("错误: %s\n", summary.error.c_str());
     printf("VMAF mean=%.4f harmonic=%.4f min=%.4f max=%.4f\n", summary.mean, summary.harmonicMean,
            summary.minScore, summary.maxScore);
-    printf("PSNR mean=%.2f dB\n", summary.psnrMean);
+    printf("PSNR avg mean=%.2f dB\n", summary.psnrMean);
     printf("匹配 %d 对, 丢帧 %d, 冻结重复 %d, 冻结段 %d, 最长冻结 %d 帧\n", summary.matched,
            summary.dropped, summary.frozen, summary.freezeSegments, summary.freezeMaxLen);
     printf("帧号: 未识别 %d 帧, 参考覆盖率 %.1f%%\n", summary.markerUnrecognized,

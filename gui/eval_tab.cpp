@@ -270,7 +270,7 @@ void EvalTab::onFinished(bool ok, const QString& error, double mean, double harm
         const double dropRate = matched + dropped > 0
                                     ? 100.0 * dropped / (matched + dropped)
                                     : 0.0;
-        QString text = tr("VMAF mean=%1  harmonic=%2  min=%3  max=%4  PSNR mean=%5 dB  |  匹配 %6 帧  丢帧 %7 (%8%)  冻结帧 %9")
+        QString text = tr("VMAF mean=%1  harmonic=%2  min=%3  max=%4  PSNR avg mean=%5 dB  |  匹配 %6 帧  丢帧 %7 (%8%)  冻结帧 %9")
                            .arg(mean, 0, 'f', 2)
                            .arg(harmonic, 0, 'f', 2)
                            .arg(minS, 0, 'f', 2)
@@ -325,11 +325,14 @@ void EvalTab::onChartFrameSelected(int idx) {
     // idx 为图表样本序号, 经 chartToFinal_ 反查 finalFrames_
     if (idx < 0 || idx >= chartToFinal_.size()) return;
     const auto& e = finalFrames_[chartToFinal_[idx]];
-    appendLog("info", tr("查看帧 %1 → 目标帧 %2, VMAF=%3, PSNR=%4 dB")
+    appendLog("info", tr("查看帧 %1 → 目标帧 %2, VMAF=%3, PSNR avg=%4 dB (Y/U/V=%5/%6/%7)")
                           .arg(e.refIdx)
                           .arg(e.distIdx)
                           .arg(e.score, 0, 'f', 2)
-                          .arg(e.psnr, 0, 'f', 2));
+                          .arg(e.psnr, 0, 'f', 2)
+                          .arg(e.psnrY, 0, 'f', 2)
+                          .arg(e.psnrU, 0, 'f', 2)
+                          .arg(e.psnrV, 0, 'f', 2));
 }
 
 void EvalTab::exportJson() {
@@ -346,7 +349,12 @@ void EvalTab::exportJson() {
         if (!e.dropped) {
             o["dist_frame"] = e.distIdx;
             if (e.scoreValid) o["vmaf"] = e.score;
-            if (e.psnr >= 0) o["psnr"] = e.psnr;
+            if (e.psnr >= 0) { // psnr 为 Y/U/V 加权平均口径
+                o["psnr"] = e.psnr;
+                o["psnr_y"] = e.psnrY;
+                o["psnr_u"] = e.psnrU;
+                o["psnr_v"] = e.psnrV;
+            }
         }
         frames.append(o);
     }
@@ -379,14 +387,19 @@ void EvalTab::exportCsv() {
     QFile file(f);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
     QTextStream ts(&file);
-    ts << "ref_frame,dist_frame,vmaf,psnr,status\n";
+    ts << "ref_frame,dist_frame,vmaf,psnr_avg,psnr_y,psnr_u,psnr_v,status\n";
     for (const auto& e : finalFrames_) {
         ts << e.refIdx << ',';
         if (!e.dropped) ts << e.distIdx;
         ts << ',';
         if (!e.dropped && e.scoreValid) ts << QString::number(e.score, 'f', 4);
         ts << ',';
-        if (!e.dropped && e.psnr >= 0) ts << QString::number(e.psnr, 'f', 4);
+        if (!e.dropped && e.psnr >= 0) {
+            ts << QString::number(e.psnr, 'f', 4) << ',' << QString::number(e.psnrY, 'f', 4) << ','
+               << QString::number(e.psnrU, 'f', 4) << ',' << QString::number(e.psnrV, 'f', 4);
+        } else {
+            ts << ",,,";
+        }
         ts << ',' << (e.dropped ? "dropped" : "matched") << '\n';
     }
 }

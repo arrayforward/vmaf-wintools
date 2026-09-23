@@ -12,7 +12,8 @@ struct EvalFrameEntry {
     bool dropped = false;
     bool scoreValid = false;
     double score = 0;
-    double psnr = -1.0; // -1 = 无效
+    double psnr = -1.0;                        // PSNR 加权平均 (Y/U/V 按像素数加权)
+    double psnrY = -1.0, psnrU = -1.0, psnrV = -1.0; // 各平面 PSNR, -1 = 无效
 };
 Q_DECLARE_METATYPE(EvalFrameEntry)
 
