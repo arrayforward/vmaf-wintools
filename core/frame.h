@@ -39,4 +39,8 @@ bool frameToRgbThumb(const Frame& f, std::vector<uint8_t>& rgb, int& outW, int& 
 // 缩放帧 (基于 swscale)
 Frame scaleFrame(const Frame& src, int w, int h);
 
+// 旋转帧 (quarterTurns: 1=90°CW, 2=180°, 3=270°CW); 90/270 度时宽高互换
+// 奇数尺寸先裁到偶数 (yuv420p 色度半分辨率对齐)
+Frame rotateFrame(const Frame& src, int quarterTurns);
+
 } // namespace vt

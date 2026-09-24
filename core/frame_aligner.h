@@ -11,6 +11,9 @@ struct VideoScan {
     int markerCount = 0;          // 识别出帧号标记的帧数
     // 所有有效标记的 QR 码区实测外接框均值 (输入图坐标系); markerQrSize<=0 表示无
     double markerQrX = 0, markerQrY = 0, markerQrSize = 0;
+    // QR 外接框中心方位推断的画面旋转 (顺时针 90° 的倍数, 0-3): 横屏片源的 QR 在右下,
+    // 出现在左下/左上/右上分别对应录屏被旋转 90°CW/180°/270°CW
+    int rotation = 0;
     int64_t totalFrames = 0;
     double fps = 0;
     int width = 0, height = 0;

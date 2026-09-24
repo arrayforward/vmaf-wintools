@@ -50,7 +50,7 @@ class MainActivity : Activity() {
         player = ExoPlayer.Builder(this).build().also { exo ->
             playerView.player = exo
             exo.repeatMode = Player.REPEAT_MODE_ONE
-            exo.volume = 0f
+            exo.volume = 1f
 
             val uri = resolveVideoUri()
             if (uri != null) {

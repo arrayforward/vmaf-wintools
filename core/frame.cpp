@@ -82,4 +82,35 @@ Frame scaleFrame(const Frame& src, int w, int h) {
     return out;
 }
 
+Frame rotateFrame(const Frame& src, int quarterTurns) {
+    quarterTurns &= 3;
+    if (!src.valid() || quarterTurns == 0) return src;
+    // 奇数尺寸裁到偶数 (yuv420p 色度半分辨率对齐)
+    const int w = src.width & ~1, h = src.height & ~1;
+    const bool swap = (quarterTurns & 1) != 0;
+    Frame out;
+    out.alloc(swap ? h : w, swap ? w : h);
+
+    // 90°CW: (x,y)->(h-1-y, x); 180°: (x,y)->(w-1-x, h-1-y); 270°CW: (x,y)->(y, w-1-x)
+    const auto rotPlane = [&](const uint8_t* sp, int ss, int pw, int ph, uint8_t* dp, int ds) {
+        for (int y = 0; y < ph; ++y) {
+            const uint8_t* srow = sp + static_cast<size_t>(y) * ss;
+            for (int x = 0; x < pw; ++x) {
+                int dx, dy;
+                switch (quarterTurns) {
+                case 1: dx = ph - 1 - y; dy = x; break;
+                case 2: dx = pw - 1 - x; dy = ph - 1 - y; break;
+                default: dx = y; dy = pw - 1 - x; break;
+                }
+                dp[static_cast<size_t>(dy) * ds + dx] = srow[x];
+            }
+        }
+    };
+    rotPlane(src.y.data(), src.strideY, w, h, out.y.data(), out.strideY);
+    rotPlane(src.u.data(), src.strideU, w / 2, h / 2, out.u.data(), out.strideU);
+    rotPlane(src.v.data(), src.strideV, w / 2, h / 2, out.v.data(), out.strideV);
+    out.ptsMs = src.ptsMs;
+    return out;
+}
+
 } // namespace vt

@@ -15,11 +15,12 @@ void log(const PipelineCallbacks& cb, const std::string& level, const std::strin
     if (cb.onLog) cb.onLog(level, msg);
 }
 
-// 第一遍扫描: 提取全部帧的帧号标记
+// 第一遍扫描: 提取全部帧的帧号标记, 并由 QR 方位投票检测画面旋转
 bool scanVideo(VideoReader& reader, VideoScan& scan, std::atomic<bool>& stop,
                const PipelineCallbacks& cb, const char* tag) {
     Frame f;
     int idx = 0;
+    int rotVotes[4] = {0, 0, 0, 0}; // 象限 -> 顺时针 90° 倍数: 右下=0 左下=1 左上=2 右上=3
     while (!stop.load() && reader.readFrame(f)) {
         MarkerInfo mi;
         if (decodeMarker(f, mi) && mi.valid) {
@@ -29,6 +30,12 @@ bool scanVideo(VideoReader& reader, VideoScan& scan, std::atomic<bool>& stop,
             scan.markerQrX += mi.qrX;
             scan.markerQrY += mi.qrY;
             scan.markerQrSize += mi.qrSize;
+            // 前若干帧投票旋转方向 (QR 应恒在角落, 远离中心即可靠)
+            if (scan.markerCount <= 10) {
+                const bool right = mi.qrX + mi.qrSize / 2 >= f.width / 2;
+                const bool bottom = mi.qrY + mi.qrSize / 2 >= f.height / 2;
+                ++rotVotes[right ? (bottom ? 0 : 3) : (bottom ? 1 : 2)];
+            }
         } else {
             scan.markerIndex.push_back(-1);
         }
@@ -39,6 +46,7 @@ bool scanVideo(VideoReader& reader, VideoScan& scan, std::atomic<bool>& stop,
         scan.markerQrX /= scan.markerCount;
         scan.markerQrY /= scan.markerCount;
         scan.markerQrSize /= scan.markerCount;
+        scan.rotation = static_cast<int>(std::max_element(rotVotes, rotVotes + 4) - rotVotes);
     }
     scan.totalFrames = static_cast<int64_t>(scan.markerIndex.size());
     scan.fps = reader.fps();
@@ -294,10 +302,27 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
     }
 
     // ---------- 裁剪 (默认全帧; 由 QR 实测外接框反推各端视频区域) ----------
+    // 目标侧画面旋转: distFix = 转正所需的顺时针 90° 倍数; distW/distH 为转正后尺寸
+    const int distFix = (4 - scanDist.rotation) % 4;
+    const int distW = (scanDist.rotation & 1) ? scanDist.height : scanDist.width;
+    const int distH = (scanDist.rotation & 1) ? scanDist.width : scanDist.height;
+    if (scanDist.rotation != 0)
+        log(cb, "info", "检测到目标画面旋转 " + std::to_string(scanDist.rotation * 90) +
+                            "° (顺时针), 已自动转正");
+
+    // 第一个映射对 (供旋转坐标系修正与黑边细化)
+    int firstRef = -1, firstDist = -1;
+    for (size_t i = 0; i < mapping.refToDist.size(); ++i) {
+        if (mapping.refToDist[i] >= 0) {
+            firstRef = static_cast<int>(i);
+            firstDist = mapping.refToDist[i];
+            break;
+        }
+    }
+
     CropRect rc = normalizeCrop(CropRect{0, 0, scanRef.width, scanRef.height}, scanRef.width,
                                 scanRef.height);
-    CropRect dc = normalizeCrop(CropRect{0, 0, scanDist.width, scanDist.height}, scanDist.width,
-                                scanDist.height);
+    CropRect dc = normalizeCrop(CropRect{0, 0, distW, distH}, distW, distH);
     {
         // 目标可能是缩放/信箱化的采集帧, 反推的目标分辨率取参考视频
         // 反推结果先按最近偶数取整 (normalizeCrop 的 &~1 只会向下取, 1px 反推误差
@@ -314,27 +339,34 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
                                 std::to_string(rc.h) + " @(" + std::to_string(rc.x) + "," +
                                 std::to_string(rc.y) + ")");
         }
-        if (scanDist.markerQrSize > 0 &&
-            videoRectFromMarker(scanDist.markerQrX, scanDist.markerQrY, scanDist.markerQrSize,
-                                scanRef.width, scanRef.height, vx, vy, vw, vh)) {
-            dc = normalizeCrop(CropRect{roundEven(vx), roundEven(vy), roundEven(vw),
-                                        roundEven(vh)},
-                               scanDist.width, scanDist.height);
-            log(cb, "info", "自动裁剪(目标): 帧号标记反推视频区域 " + std::to_string(dc.w) + "x" +
-                                std::to_string(dc.h) + " @(" + std::to_string(dc.x) + "," +
-                                std::to_string(dc.y) + ")");
+        if (scanDist.markerQrSize > 0) {
+            double qx = scanDist.markerQrX, qy = scanDist.markerQrY, qs = scanDist.markerQrSize;
+            if (distFix != 0) {
+                // 扫描存的 QR 框是旋转前坐标系: 转正第一个映射帧后重新解码拿框
+                Frame f;
+                if (firstDist >= 0 &&
+                    readFrameAt(cfg.distPath, cfg.yuvDistSize, cfg.yuvFps, firstDist, f)) {
+                    f = rotateFrame(f, distFix);
+                    MarkerInfo mi;
+                    if (decodeMarker(f, mi) && mi.valid) {
+                        qx = mi.qrX;
+                        qy = mi.qrY;
+                        qs = mi.qrSize;
+                    }
+                }
+            }
+            if (videoRectFromMarker(qx, qy, qs, scanRef.width, scanRef.height, vx, vy, vw, vh)) {
+                dc = normalizeCrop(CropRect{roundEven(vx), roundEven(vy), roundEven(vw),
+                                            roundEven(vh)},
+                                   distW, distH);
+                log(cb, "info", "自动裁剪(目标): 帧号标记反推视频区域 " + std::to_string(dc.w) +
+                                    "x" + std::to_string(dc.h) + " @(" + std::to_string(dc.x) +
+                                    "," + std::to_string(dc.y) + ")");
+            }
         }
     }
     {
         // 黑边/充满细化: 用第一个映射帧的实际内容把近似裁剪框吸附到视频区边界
-        int firstRef = -1, firstDist = -1;
-        for (size_t i = 0; i < mapping.refToDist.size(); ++i) {
-            if (mapping.refToDist[i] >= 0) {
-                firstRef = static_cast<int>(i);
-                firstDist = mapping.refToDist[i];
-                break;
-            }
-        }
         Frame f;
         if (scanRef.markerQrSize > 0 && firstRef >= 0 &&
             readFrameAt(cfg.refPath, cfg.yuvRefSize, cfg.yuvFps, firstRef, f)) {
@@ -349,8 +381,9 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
         }
         if (scanDist.markerQrSize > 0 && firstDist >= 0 &&
             readFrameAt(cfg.distPath, cfg.yuvDistSize, cfg.yuvFps, firstDist, f)) {
-            const CropRect refined = normalizeCrop(refineCropByFrame(f, dc), scanDist.width,
-                                                   scanDist.height);
+            if (distFix != 0) f = rotateFrame(f, distFix); // 转正后再做边界吸附
+            const CropRect refined =
+                normalizeCrop(refineCropByFrame(f, dc), distW, distH);
             if (refined.x != dc.x || refined.y != dc.y || refined.w != dc.w || refined.h != dc.h) {
                 dc = refined;
                 log(cb, "info", "裁剪细化(目标): 黑边吸附/充满 -> " + std::to_string(dc.w) + "x" +
@@ -470,6 +503,9 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
             if (cb.onFrame) cb.onFrame(fr);
             continue;
         }
+
+        // 画面旋转转正 (录屏被旋转时), 转正后再走裁剪/缩放/比对
+        if (distFix) df = rotateFrame(df, distFix);
 
         Frame rc2 = cropFrame(rf, rc.x, rc.y, rc.w, rc.h);
         Frame dc2 = cropFrame(df, dc.x, dc.y, dc.w, dc.h);

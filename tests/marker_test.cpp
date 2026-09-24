@@ -194,6 +194,34 @@ void testLetterbox() {
     std::printf("test 6 (letterbox) done\n");
 }
 
+// 测试 7: 旋转 90/180/270 后仍能解码 (quirc 不受旋转影响), 且 QR 外接框中心
+// 方位与旋转角度映射一致 (右下=0°, 左下=90°CW, 左上=180°, 右上=270°CW)
+void testRotated() {
+    vt::Frame f = makeFrame(1280, 720, Content::Gradient, 11);
+    CHECK(vt::burnMarker(f, 777), "burn for rotate test");
+    for (int turns = 1; turns <= 3; ++turns) {
+        vt::Frame g = vt::rotateFrame(f, turns);
+        CHECK(g.valid(), "rotateFrame ok");
+        // 90/270 宽高互换
+        CHECK(g.width == (turns == 2 ? 1280 : 720) && g.height == (turns == 2 ? 720 : 1280),
+              "rotated dims swapped");
+        vt::MarkerInfo mi;
+        CHECK(vt::decodeMarker(g, mi), "decode rotated returns true");
+        char msg[128];
+        std::snprintf(msg, sizeof(msg), "rotated %dCW frameIndex (got %d)", turns * 90,
+                      mi.frameIndex);
+        CHECK(mi.valid && mi.frameIndex == 777, msg);
+        // 方位: 中心相对帧中心的象限
+        const bool right = mi.qrX + mi.qrSize / 2 >= g.width / 2;
+        const bool bottom = mi.qrY + mi.qrSize / 2 >= g.height / 2;
+        const int quadrant = right ? (bottom ? 0 : 3) : (bottom ? 1 : 2);
+        std::snprintf(msg, sizeof(msg), "rotated %dCW quadrant %d == %d", turns * 90, quadrant,
+                      turns);
+        CHECK(quadrant == turns, msg);
+    }
+    std::printf("test 7 (rotated) done\n");
+}
+
 } // namespace
 
 int main() {
@@ -203,6 +231,7 @@ int main() {
     testNegative();
     testCorrupted();
     testLetterbox();
+    testRotated();
     std::printf("----\npassed: %d, failed: %d\n", g_passCount, g_failCount);
     return g_failCount == 0 ? 0 : 1;
 }
