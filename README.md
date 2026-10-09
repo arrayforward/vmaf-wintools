@@ -17,6 +17,10 @@ Windows 端按帧号精确对齐并做全参考 VMAF 打分(逐帧 + 池化统�
 
 ## 快速上手
 
+Windows 发布包 `vmaf_tool-windows.zip` 已随包附带 VC++ 运行库 DLL
+(msvcp140*/vcruntime140*),解压即用;若个别机器仍提示缺少运行库,
+安装微软官方 [vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe) 即可。
+
 1. **装 APK**:构建安装 android_player(见 [android_player/README.md](android_player/README.md)),
    烧码片源命名 `test_video.mp4` 放入 `app/src/main/assets/`
 2. **播放**:设备上打开 App,自动全屏循环播放
