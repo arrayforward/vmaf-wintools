@@ -89,6 +89,10 @@ target_link_libraries(vmaf_tool PRIVATE
     ${VMAF_LIB}
 )
 
+# Release 也生成 pdb: 崩溃日志 (vmaf_tool_crash.log) 的模块+偏移可事后定位到行
+target_compile_options(vmaf_tool PRIVATE /Zi)
+target_link_options(vmaf_tool PRIVATE /DEBUG)
+
 # ---- 运行时文件拷贝 ----
 # FFmpeg DLL 与可执行文件 (ffmpeg/ffprobe 供预处理 Tab 内置使用)
 file(GLOB FFMPEG_DLLS "${FFMPEG_ROOT}/bin/*.dll")
@@ -169,6 +173,37 @@ target_link_libraries(eval_cli PRIVATE
     ${SWSCALE_LIB}
     ${VMAF_LIB}
 )
+
+# ---- 测试: GUI 评测收尾复现 (默认真窗口, --offscreen 无显示) ----
+add_executable(eval_gui_test
+    tests/eval_gui_test.cpp
+    gui/main_window.h gui/main_window.cpp
+    gui/eval_tab.h gui/eval_tab.cpp
+    gui/capture_tab.h gui/capture_tab.cpp
+    gui/jank_tab.h gui/jank_tab.cpp
+    gui/preprocess_tab.h gui/preprocess_tab.cpp
+    gui/worker.h gui/worker.cpp
+    gui/ref_source.h gui/ref_source.cpp
+    gui/vmaf_chart_widget.h gui/vmaf_chart_widget.cpp
+    ${CORE_SOURCES}
+    ${QRCODEGEN_SOURCES} ${QUIRC_SOURCES}
+)
+target_include_directories(eval_gui_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FFMPEG_INCLUDE_DIR}
+    ${LIBVMAF_INCLUDE_DIR}
+)
+target_link_libraries(eval_gui_test PRIVATE
+    Qt6::Widgets
+    ${AVFORMAT_LIB}
+    ${AVCODEC_LIB}
+    ${AVUTIL_LIB}
+    ${SWSCALE_LIB}
+    ${VMAF_LIB}
+)
+# 崩溃栈定位需要符号
+target_compile_options(eval_gui_test PRIVATE /Zi)
+target_link_options(eval_gui_test PRIVATE /DEBUG)
 
 # ---- 工具: QR 帧号烧录 ----
 add_executable(marker_burn
