@@ -418,11 +418,13 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
     VmafEvaluator vmaf;
     {
         std::string err;
+        log(cb, "info", "初始化 VMAF...");
         if (!vmaf.init(cfg.vmaf, cmpW, cmpH, err)) {
             summary.error = err;
             if (cb.onFinished) cb.onFinished(summary);
             return;
         }
+        log(cb, "info", "VMAF 初始化完成, 开始送帧");
     }
 
     // ---------- 第二遍: 按映射送帧 ----------

@@ -34,6 +34,11 @@ void EvalWorker::run() {
     };
 
     pipeline_.run(cfg_, cb);
+
+    // 测试慢机器收尾时序: VMAF_TEST_SLOW_FINISH=秒数 时在 emit evalFinished 之后
+    // 模拟耗时清理 (QThread 对象仍存活, 线程未退出)
+    static const int slowFinishSec = qgetenv("VMAF_TEST_SLOW_FINISH").toInt();
+    if (slowFinishSec > 0) QThread::sleep(slowFinishSec);
 }
 
 // ---- JankWorker ----

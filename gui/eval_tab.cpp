@@ -156,8 +156,9 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
 
 EvalTab::~EvalTab() {
     if (worker_) {
+        // 先请求停止再等待线程退出, 确保 QThread 不会在运行中被销毁 (qFatal)
         worker_->requestStop();
-        worker_->wait(5000);
+        worker_->wait();
     }
 }
 
@@ -171,7 +172,7 @@ void EvalTab::browseDist() {
 void EvalTab::setDistInput(const QString& path) { distEdit_->setText(path); }
 
 void EvalTab::startEvaluation() {
-    if (worker_) return; // 正在评估中
+    if (worker_) return; // 正在评估中 (含收尾阶段)
     startEval();
 }
 
@@ -192,6 +193,7 @@ void EvalTab::setRunning(bool running) {
 }
 
 void EvalTab::startEval() {
+    if (worker_) return; // 重入保护: 上一轮 worker 尚未销毁
     if (refPath_.isEmpty()) {
         QMessageBox::warning(this, tr("提示"),
                              tr("未找到参考片源 %1, 请将其放在程序目录").arg(kRefSourceName));
@@ -229,6 +231,8 @@ void EvalTab::startEval() {
     connect(worker_, &EvalWorker::logMessage, this, &EvalTab::onLog);
     connect(worker_, &EvalWorker::progressChanged, this, &EvalTab::onProgress);
     connect(worker_, &EvalWorker::evalFinished, this, &EvalTab::onFinished);
+    // 标准 QThread 生命周期: 线程退出后自动销毁, 不在 onFinished 里 wait/deleteLater
+    connect(worker_, &QThread::finished, worker_, &QObject::deleteLater);
     setRunning(true);
     worker_->start();
 }
@@ -297,11 +301,8 @@ void EvalTab::onFinished(bool ok, const QString& error, double mean, double harm
         resultLabel_->setText(tr("评估失败: %1").arg(error));
         appendLog("error", error);
     }
-    if (worker_) {
-        worker_->wait(5000);
-        worker_->deleteLater();
-        worker_ = nullptr;
-    }
+    // worker 由 finished → deleteLater 自动销毁 (worker_ 为 QPointer, 销毁后自动置空);
+    // 这里只消费结果数据 (finalFrames_ 为值拷贝, 与 worker 生命周期无关)
 }
 
 void EvalTab::rebuildChart() {

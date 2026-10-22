@@ -68,6 +68,7 @@ set(GUI_SOURCES
     gui/jank_tab.h gui/jank_tab.cpp
     gui/preprocess_tab.h gui/preprocess_tab.cpp
     gui/worker.h gui/worker.cpp
+    gui/crash_log.h gui/crash_log.cpp
     gui/ref_source.h gui/ref_source.cpp
     gui/vmaf_chart_widget.h gui/vmaf_chart_widget.cpp
 )
@@ -174,6 +175,25 @@ target_link_libraries(eval_cli PRIVATE
     ${VMAF_LIB}
 )
 
+# ---- 测试: 同进程连续两次 Pipeline 评估 ----
+add_executable(double_eval_test
+    tests/double_eval_test.cpp
+    ${CORE_SOURCES}
+    ${QRCODEGEN_SOURCES} ${QUIRC_SOURCES}
+)
+target_include_directories(double_eval_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FFMPEG_INCLUDE_DIR}
+    ${LIBVMAF_INCLUDE_DIR}
+)
+target_link_libraries(double_eval_test PRIVATE
+    ${AVFORMAT_LIB}
+    ${AVCODEC_LIB}
+    ${AVUTIL_LIB}
+    ${SWSCALE_LIB}
+    ${VMAF_LIB}
+)
+
 # ---- 测试: GUI 评测收尾复现 (默认真窗口, --offscreen 无显示) ----
 add_executable(eval_gui_test
     tests/eval_gui_test.cpp
@@ -183,6 +203,7 @@ add_executable(eval_gui_test
     gui/jank_tab.h gui/jank_tab.cpp
     gui/preprocess_tab.h gui/preprocess_tab.cpp
     gui/worker.h gui/worker.cpp
+    gui/crash_log.h gui/crash_log.cpp
     gui/ref_source.h gui/ref_source.cpp
     gui/vmaf_chart_widget.h gui/vmaf_chart_widget.cpp
     ${CORE_SOURCES}

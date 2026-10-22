@@ -5,6 +5,7 @@
 #include "worker.h" // EvalFrameEntry
 
 #include <QHash>
+#include <QPointer>
 #include <QWidget>
 
 class QLineEdit;
@@ -66,7 +67,8 @@ private:
     QPushButton* exportJsonBtn_;
     QPushButton* exportCsvBtn_;
 
-    EvalWorker* worker_ = nullptr;
+    // QThread 生命周期: finished → deleteLater 自动销毁; QPointer 在销毁后自动置空
+    QPointer<EvalWorker> worker_;
 
     QVector<EvalFrameEntry> finalFrames_; // 评测完成时的全量逐帧结果 (含 flush 补齐分数), 供导出/图表
     QVector<int> chartToFinal_;         // 图表样本序号 -> finalFrames_ 下标 (点击回查)

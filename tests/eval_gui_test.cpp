@@ -1,9 +1,10 @@
-// eval_gui_test: offscreen 复现 GUI 评测收尾崩溃
+// eval_gui_test: 复现 GUI 评测收尾崩溃 (offscreen 或真窗口)
 //
-// 用法: eval_gui_test <目标视频或截图文件夹> [超时秒, 默认 240]
+// 用法: eval_gui_test <目标视频或截图文件夹> [超时秒, 默认 240] [--offscreen]
 // 参考片源由 gui/ref_source.cpp 自动解析 (exe 上两级 testdata 命中仓库)。
-// 崩溃时通过 VEH + dbghelp 打印调用栈。
+// 崩溃诊断 (VEH + Qt 消息日志) 与正式程序共用 gui/crash_log。
 
+#include "../gui/crash_log.h"
 #include "../gui/eval_tab.h"
 #include "../gui/main_window.h"
 
@@ -12,67 +13,62 @@
 #include <QElapsedTimer>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QTimer>
 
 #include <cstdio>
+#include <cstring>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <tlhelp32.h>
 
-#include <dbghelp.h>
-#pragma comment(lib, "dbghelp.lib")
-
-static LONG WINAPI crashDump(PEXCEPTION_POINTERS ep) {
-    const DWORD code = ep->ExceptionRecord->ExceptionCode;
-    // 只处理致命异常; 0x4001xxxx 是无调试器时 OutputDebugString 的调试输出通知, 放行
-    if (code == 0x40010006 || code == 0x4001000a) return EXCEPTION_CONTINUE_SEARCH;
-    fprintf(stderr, "\n!!!! 崩溃: exception code 0x%08lx at %p\n", code,
-            ep->ExceptionRecord->ExceptionAddress);
-    HANDLE proc = GetCurrentProcess();
-    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
-    SymInitialize(proc, nullptr, TRUE);
-    void* stack[64];
-    const USHORT n = RtlCaptureStackBackTrace(0, 64, stack, nullptr);
-    SYMBOL_INFO* sym = reinterpret_cast<SYMBOL_INFO*>(_alloca(sizeof(SYMBOL_INFO) + 256));
-    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
-    sym->MaxNameLen = 255;
-    IMAGEHLP_LINE64 line = {};
-    line.SizeOfStruct = sizeof(line);
-    for (USHORT i = 0; i < n; ++i) {
-        const DWORD64 addr = reinterpret_cast<DWORD64>(stack[i]);
-        // 模块名 + 偏移 (无 pdb 的 DLL 也能定位)
-        HMODULE mod = nullptr;
-        wchar_t modName[MAX_PATH] = L"?";
-        DWORD64 base = 0;
-        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                               reinterpret_cast<LPCWSTR>(addr), &mod)) {
-            GetModuleFileNameW(mod, modName, MAX_PATH);
-            base = reinterpret_cast<DWORD64>(mod);
+// 卡死定位: 枚举本进程线程, 挂起后读取 RIP 及所属模块 (无需外部调试器)
+static void dumpThreads() {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    THREADENTRY32 te = {};
+    te.dwSize = sizeof(te);
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != GetCurrentProcessId()) continue;
+        HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+                                  THREAD_QUERY_INFORMATION,
+                              FALSE, te.th32ThreadID);
+        if (!h) continue;
+        if (te.th32ThreadID != GetCurrentThreadId()) {
+            SuspendThread(h);
+            CONTEXT ctx = {};
+            ctx.ContextFlags = CONTEXT_CONTROL;
+            if (GetThreadContext(h, &ctx)) {
+                HMODULE mod = nullptr;
+                wchar_t modName[MAX_PATH] = L"?";
+                DWORD64 base = 0;
+                if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       reinterpret_cast<LPCWSTR>(ctx.Rip), &mod)) {
+                    GetModuleFileNameW(mod, modName, MAX_PATH);
+                    base = reinterpret_cast<DWORD64>(mod);
+                }
+                fprintf(stderr, "[thread %lu] RIP=%llx %S+0x%llx\n", te.th32ThreadID,
+                        static_cast<unsigned long long>(ctx.Rip), modName,
+                        static_cast<unsigned long long>(ctx.Rip - base));
+            }
+            ResumeThread(h);
         }
-        QString desc = QString::fromWCharArray(modName) + "+" +
-                       QString::number(addr - base, 16);
-        if (SymFromAddr(proc, addr, nullptr, sym) && sym->NameLen > 1) {
-            desc += QString::fromLatin1("  ") + QString::fromLatin1(sym->Name);
-            DWORD disp = 0;
-            if (SymGetLineFromAddr64(proc, addr, &disp, &line))
-                desc += QString::fromLatin1("  %1:%2").arg(line.FileName).arg(line.LineNumber);
-        }
-        fprintf(stderr, "  #%02d %s\n", i, desc.toUtf8().constData());
+        CloseHandle(h);
     }
+    CloseHandle(snap);
     fflush(stderr);
-    return EXCEPTION_EXECUTE_HANDLER;
 }
 #endif
 
 int main(int argc, char** argv) {
-#ifdef _WIN32
-    AddVectoredExceptionHandler(1, crashDump);
-#endif
+    installCrashLogging();
     if (argc < 2) {
         fprintf(stderr, "用法: %s <目标视频或截图文件夹> [超时秒] [--offscreen]\n", argv[0]);
         return 2;
@@ -99,6 +95,23 @@ int main(int argc, char** argv) {
         if (l->text().contains(QStringLiteral("尚未评估"))) resultLabel = l;
 
     tab->setDistInput(QString::fromUtf8(argv[1]));
+    // 实验: 设置 VMAF_TEST_THREADS=N 时把线程数 spinbox 设为 N (0=自动)
+    const int testThreads = qgetenv("VMAF_TEST_THREADS").toInt();
+    if (testThreads > 0)
+        for (auto* s : tab->findChildren<QSpinBox*>()) s->setValue(testThreads);
+    // 心跳: 区分 GUI 主线程死锁 (心跳停止) 与 worker 卡死 (心跳继续但进度不动)
+    auto* progress = tab->findChild<QProgressBar*>();
+    QTimer heartbeat;
+    int hbCount = 0;
+    QObject::connect(&heartbeat, &QTimer::timeout, [progress, &hbCount] {
+        ++hbCount;
+        if (progress) printf("[hb] progress=%d/%d\n", progress->value(), progress->maximum());
+        fflush(stdout);
+#ifdef _WIN32
+        if (hbCount % 6 == 0) dumpThreads(); // 每 30s 采样一次线程 RIP
+#endif
+    });
+    heartbeat.start(5000);
     // 模拟采集 Tab 联动: 直接发 sendToEval (与 MainWindow 连接路径一致)
     for (auto* c : w.findChildren<QWidget*>()) {
         if (QString::fromLatin1(c->metaObject()->className()) == "CaptureTab") {
@@ -142,6 +155,9 @@ int main(int argc, char** argv) {
     if (timer.elapsed() >= timeoutSec * 1000LL) {
         printf("[harness] 超时, 结果栏: %s\n",
                resultLabel ? resultLabel->text().toUtf8().constData() : "(无)");
+#ifdef _WIN32
+        dumpThreads();
+#endif
         // .dump 日志区内容辅助定位
         for (auto* l : tab->findChildren<QLabel*>())
             printf("[label] %s\n", l->text().toUtf8().constData());

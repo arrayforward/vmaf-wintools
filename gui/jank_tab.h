@@ -2,6 +2,7 @@
 
 #include "worker.h" // JankWorker / JankSegEntry
 
+#include <QPointer>
 #include <QWidget>
 
 class QLineEdit;
@@ -44,7 +45,7 @@ private:
     QPushButton* exportCsvBtn_;
     QPlainTextEdit* log_;
 
-    JankWorker* worker_ = nullptr;
+    QPointer<JankWorker> worker_; // finished → deleteLater 自动销毁, 销毁后自动置空
     QVector<JankSegEntry> segs_; // 逐显示段全量结果, 供导出
     bool hasResult_ = false;
 };

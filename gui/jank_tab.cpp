@@ -83,8 +83,9 @@ JankTab::JankTab(QWidget* parent) : QWidget(parent) {
 
 JankTab::~JankTab() {
     if (worker_) {
+        // 先请求停止再等待线程退出, 确保 QThread 不会在运行中被销毁 (qFatal)
         worker_->requestStop();
-        worker_->wait(5000);
+        worker_->wait();
     }
 }
 
@@ -111,6 +112,7 @@ void JankTab::setRunning(bool running) {
 }
 
 void JankTab::startAnalysis() {
+    if (worker_) return; // 重入保护: 上一轮 worker 尚未销毁
     if (inputEdit_->text().isEmpty()) {
         QMessageBox::warning(this, tr("提示"), tr("请先选择录屏视频"));
         return;
@@ -131,6 +133,8 @@ void JankTab::startAnalysis() {
     connect(worker_, &JankWorker::logMessage, this, &JankTab::onLog);
     connect(worker_, &JankWorker::progressChanged, this, &JankTab::onProgress);
     connect(worker_, &JankWorker::jankFinished, this, &JankTab::onFinished);
+    // 标准 QThread 生命周期: 线程退出后自动销毁
+    connect(worker_, &QThread::finished, worker_, &QObject::deleteLater);
     setRunning(true);
     worker_->start();
 }
@@ -192,11 +196,7 @@ void JankTab::onFinished(bool ok, const QString& error, double captureFps, doubl
         resultLabel_->setText(tr("分析失败: %1").arg(error));
         appendLog("error", error);
     }
-    if (worker_) {
-        worker_->wait(5000);
-        worker_->deleteLater();
-        worker_ = nullptr;
-    }
+    // worker 由 finished → deleteLater 自动销毁, 这里只消费结果数据
 }
 
 void JankTab::exportCsv() {

@@ -1,4 +1,5 @@
 #include "main_window.h"
+#include "crash_log.h"
 #include "ref_source.h"
 
 #include "../core/pipeline.h"
@@ -14,43 +15,6 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-
-#include <dbghelp.h>
-#pragma comment(lib, "dbghelp.lib")
-
-// 未处理异常崩溃栈: 写 exe 旁 vmaf_tool_crash.log, 便于定位用户环境崩溃
-static LONG WINAPI crashHandler(PEXCEPTION_POINTERS ep) {
-    const DWORD code = ep->ExceptionRecord->ExceptionCode;
-    if (code == 0x40010006 || code == 0x4001000a) // OutputDebugString 通知, 放行
-        return EXCEPTION_CONTINUE_SEARCH;
-    char logPath[MAX_PATH];
-    GetModuleFileNameA(nullptr, logPath, MAX_PATH);
-    char* sep = strrchr(logPath, '\\');
-    if (sep) strcpy_s(sep + 1, MAX_PATH - static_cast<size_t>(sep + 1 - logPath),
-                      "vmaf_tool_crash.log");
-    FILE* fp = fopen(logPath, "a");
-    if (!fp) fp = stderr;
-    fprintf(fp, "\n!!!! 崩溃: exception code 0x%08lx at %p\n", code,
-            ep->ExceptionRecord->ExceptionAddress);
-    void* stack[64];
-    const USHORT n = RtlCaptureStackBackTrace(0, 64, stack, nullptr);
-    for (USHORT i = 0; i < n; ++i) {
-        const DWORD64 addr = reinterpret_cast<DWORD64>(stack[i]);
-        HMODULE mod = nullptr;
-        char modName[MAX_PATH] = "?";
-        DWORD64 base = 0;
-        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                               reinterpret_cast<LPCSTR>(addr), &mod)) {
-            GetModuleFileNameA(mod, modName, MAX_PATH);
-            base = reinterpret_cast<DWORD64>(mod);
-        }
-        fprintf(fp, "  #%02d %s+0x%llx\n", i, modName,
-                static_cast<unsigned long long>(addr - base));
-    }
-    if (fp != stderr) fclose(fp);
-    return EXCEPTION_CONTINUE_SEARCH; // 交给系统默认处理 (WER)
-}
 #endif
 
 // Windows 下命令行参数为本地代码页 (GBK), 转成 UTF-8 供 FFmpeg 打开中文路径
@@ -153,9 +117,7 @@ static int runCli(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
-#ifdef _WIN32
-    AddVectoredExceptionHandler(1, crashHandler);
-#endif
+    installCrashLogging();
     convertWinArgs(argc, argv);
     if (argc > 1 && strcmp(argv[1], "--cli") == 0) {
         QCoreApplication app(argc, argv);
