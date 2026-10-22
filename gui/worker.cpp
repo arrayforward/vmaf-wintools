@@ -13,32 +13,42 @@ void EvalWorker::configure(const vt::PipelineConfig& cfg) { cfg_ = cfg; }
 void EvalWorker::requestStop() { pipeline_.stopRequested.store(true); }
 
 void EvalWorker::run() {
-    vt::PipelineCallbacks cb;
+    try {
+        vt::PipelineCallbacks cb;
 
-    cb.onLog = [this](const std::string& level, const std::string& msg) {
-        emit logMessage(QString::fromStdString(level), QString::fromStdString(msg));
-    };
-    cb.onProgress = [this](int done, int total) { emit progressChanged(done, total); };
-    // onFrame 不再转发: 该 libvmaf 构建 flush 前不可取分, GUI 图表/导出统一走
-    // evalFinished 携带的全量结果
-    cb.onFinished = [this](const vt::Summary& s) {
-        QVector<EvalFrameEntry> frames;
-        frames.reserve(static_cast<int>(s.frames.size()));
-        for (const auto& fr : s.frames)
-            frames.append({fr.refIdx, fr.distIdx, fr.dropped, fr.scoreValid, fr.score, fr.psnr,
-                           fr.psnrY, fr.psnrU, fr.psnrV});
-        emit evalFinished(s.ok, QString::fromStdString(s.error), s.mean, s.harmonicMean,
-                          s.minScore, s.maxScore, s.psnrMean, s.matched, s.dropped, s.frozen,
-                          s.markerUnrecognized, s.markerCoverage, s.freezeSegments,
-                          s.freezeMaxLen, frames);
-    };
+        cb.onLog = [this](const std::string& level, const std::string& msg) {
+            emit logMessage(QString::fromStdString(level), QString::fromStdString(msg));
+        };
+        cb.onProgress = [this](int done, int total) { emit progressChanged(done, total); };
+        // onFrame 不再转发: 该 libvmaf 构建 flush 前不可取分, GUI 图表/导出统一走
+        // evalFinished 携带的全量结果
+        cb.onFinished = [this](const vt::Summary& s) {
+            QVector<EvalFrameEntry> frames;
+            frames.reserve(static_cast<int>(s.frames.size()));
+            for (const auto& fr : s.frames)
+                frames.append({fr.refIdx, fr.distIdx, fr.dropped, fr.scoreValid, fr.score, fr.psnr,
+                               fr.psnrY, fr.psnrU, fr.psnrV});
+            emit evalFinished(s.ok, QString::fromStdString(s.error), s.mean, s.harmonicMean,
+                              s.minScore, s.maxScore, s.psnrMean, s.matched, s.dropped, s.frozen,
+                              s.markerUnrecognized, s.markerCoverage, s.freezeSegments,
+                              s.freezeMaxLen, frames);
+        };
 
-    pipeline_.run(cfg_, cb);
+        pipeline_.run(cfg_, cb);
 
-    // 测试慢机器收尾时序: VMAF_TEST_SLOW_FINISH=秒数 时在 emit evalFinished 之后
-    // 模拟耗时清理 (QThread 对象仍存活, 线程未退出)
-    static const int slowFinishSec = qgetenv("VMAF_TEST_SLOW_FINISH").toInt();
-    if (slowFinishSec > 0) QThread::sleep(slowFinishSec);
+        // 测试慢机器收尾时序: VMAF_TEST_SLOW_FINISH=秒数 时在 emit evalFinished 之后
+        // 模拟耗时清理 (QThread 对象仍存活, 线程未退出)
+        static const int slowFinishSec = qgetenv("VMAF_TEST_SLOW_FINISH").toInt();
+        if (slowFinishSec > 0) QThread::sleep(slowFinishSec);
+    } catch (const std::exception& e) {
+        // 兜底: 任何异常 (如中文路径 fs::path 转换 system_error) 都转成评测失败,
+        // 绝不让异常穿出线程导致 std::terminate 闪退
+        emit evalFinished(false, tr("内部错误: %1").arg(QString::fromUtf8(e.what())), 0, 0, 0, 0,
+                          -1, 0, 0, 0, 0, 0, 0, 0, {});
+    } catch (...) {
+        emit evalFinished(false, tr("内部错误: 未知异常"), 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0,
+                          {});
+    }
 }
 
 // ---- JankWorker ----
@@ -52,12 +62,14 @@ void JankWorker::configure(const QString& path) { path_ = path.toStdString(); }
 void JankWorker::requestStop() { stopRequested_.store(true); }
 
 void JankWorker::run() {
-    QVector<JankSegEntry> segs;
-    auto finish = [&](bool ok, const QString& error, const vt::JankReport& rep) {
-        emit jankFinished(ok, error, rep.captureFps, rep.durationMs, rep.totalFrames,
-                          rep.unrecognized, rep.avgFrameMs, rep.maxFrameMs, rep.jankCount,
-                          rep.bigJankCount, rep.jankRate, rep.bigJankRate, rep.jankPer10Min, segs);
-    };
+    try {
+        QVector<JankSegEntry> segs;
+        auto finish = [&](bool ok, const QString& error, const vt::JankReport& rep) {
+            emit jankFinished(ok, error, rep.captureFps, rep.durationMs, rep.totalFrames,
+                              rep.unrecognized, rep.avgFrameMs, rep.maxFrameMs, rep.jankCount,
+                              rep.bigJankCount, rep.jankRate, rep.bigJankRate, rep.jankPer10Min,
+                              segs);
+        };
 
     std::string err;
     auto reader = vt::createReader(path_, "", 0.0, err);
@@ -112,4 +124,11 @@ void JankWorker::run() {
     for (const auto& s : rep.segments)
         segs.append({s.frameIndex, s.displayMs, s.startMs, s.jank, s.bigJank});
     finish(true, QString(), rep);
+    } catch (const std::exception& e) {
+        // 兜底: 异常转成分析失败, 不穿出线程
+        emit jankFinished(false, tr("内部错误: %1").arg(QString::fromUtf8(e.what())), 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, {});
+    } catch (...) {
+        emit jankFinished(false, tr("内部错误: 未知异常"), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {});
+    }
 }

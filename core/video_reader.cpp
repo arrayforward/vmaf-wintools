@@ -33,24 +33,30 @@ bool isImageExt(const std::string& ext) {
 
 // 截图文件夹 -> image2 模式: 取首个图片文件, 文件名末尾数字段替换为 %0Nd
 // (如 shots/00001.png -> shots/%05d.png); 非目录或找不到带数字的图片返回 ""
+// 内部路径统一 UTF-8: 必须用 u8path (窄字符 fs::path 按系统代码页转换,
+// 中文/特殊字符路径会乱码甚至抛 system_error)
 std::string dirToImagePattern(const std::string& dir) {
     namespace fs = std::filesystem;
-    std::error_code ec;
-    if (!fs::is_directory(fs::path(dir), ec)) return "";
-    for (const auto& e : fs::directory_iterator(fs::path(dir), ec)) {
-        if (!e.is_regular_file()) continue;
-        const std::string name = e.path().filename().string();
-        const auto dot = name.find_last_of('.');
-        if (dot == std::string::npos) continue;
-        std::string ext = name.substr(dot + 1);
-        for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (!isImageExt(ext)) continue;
-        const std::string stem = name.substr(0, dot);
-        size_t begin = stem.size();
-        while (begin > 0 && std::isdigit(static_cast<unsigned char>(stem[begin - 1]))) --begin;
-        if (begin == stem.size()) continue; // 文件名无数字段
-        return dir + "/" + stem.substr(0, begin) + "%0" +
-               std::to_string(stem.size() - begin) + "d" + name.substr(dot);
+    try {
+        std::error_code ec;
+        if (!fs::is_directory(fs::u8path(dir), ec)) return "";
+        for (const auto& e : fs::directory_iterator(fs::u8path(dir), ec)) {
+            if (!e.is_regular_file()) continue;
+            const std::string name = e.path().filename().u8string();
+            const auto dot = name.find_last_of('.');
+            if (dot == std::string::npos) continue;
+            std::string ext = name.substr(dot + 1);
+            for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (!isImageExt(ext)) continue;
+            const std::string stem = name.substr(0, dot);
+            size_t begin = stem.size();
+            while (begin > 0 && std::isdigit(static_cast<unsigned char>(stem[begin - 1]))) --begin;
+            if (begin == stem.size()) continue; // 文件名无数字段
+            return dir + "/" + stem.substr(0, begin) + "%0" +
+                   std::to_string(stem.size() - begin) + "d" + name.substr(dot);
+        }
+    } catch (const std::exception&) {
+        return ""; // 目录扫描异常按普通输入处理 (后续由 FFmpeg 报错)
     }
     return "";
 }

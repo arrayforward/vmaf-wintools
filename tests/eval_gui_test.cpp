@@ -94,7 +94,8 @@ int main(int argc, char** argv) {
     for (auto* l : tab->findChildren<QLabel*>())
         if (l->text().contains(QStringLiteral("尚未评估"))) resultLabel = l;
 
-    tab->setDistInput(QString::fromUtf8(argv[1]));
+    // Windows CRT argv 为系统代码页 (GBK), 中文路径需按本地编码解码
+    tab->setDistInput(QString::fromLocal8Bit(argv[1]));
     // 实验: 设置 VMAF_TEST_THREADS=N 时把线程数 spinbox 设为 N (0=自动)
     const int testThreads = qgetenv("VMAF_TEST_THREADS").toInt();
     if (testThreads > 0)
@@ -115,7 +116,8 @@ int main(int argc, char** argv) {
     // 模拟采集 Tab 联动: 直接发 sendToEval (与 MainWindow 连接路径一致)
     for (auto* c : w.findChildren<QWidget*>()) {
         if (QString::fromLatin1(c->metaObject()->className()) == "CaptureTab") {
-            QMetaObject::invokeMethod(c, "sendToEval", Q_ARG(QString, QString::fromUtf8(argv[1])));
+            QMetaObject::invokeMethod(c, "sendToEval",
+                                      Q_ARG(QString, QString::fromLocal8Bit(argv[1])));
             break;
         }
     }
