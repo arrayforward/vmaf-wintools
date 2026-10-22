@@ -14,3 +14,5 @@ android_player/app/build/
 android_player/.gradle/
 android_player/app/src/main/assets/test_video.mp4
 dist/
+
+*.obj
