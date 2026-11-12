@@ -55,6 +55,7 @@ private:
     QLineEdit* modelPathEdit_;
     QSpinBox* threadsSpin_;
     QLineEdit* yuvSizeEdit_;
+    QPushButton* cphBtn_;
 
     QPushButton* startBtn_;
     QPushButton* stopBtn_;

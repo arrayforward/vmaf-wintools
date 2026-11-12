@@ -102,6 +102,20 @@ PsnrResult computePsnr(const Frame& a, const Frame& b) {
     return pr;
 }
 
+// 参考帧 Y 平面正向仿射 (LUT 一次构建; 仅改亮度, 色度不动)
+void applyRefAffineY(Frame& f, double a, double b) {
+    if (!f.valid()) return;
+    uint8_t lut[256];
+    for (int i = 0; i < 256; ++i) {
+        const double v = std::lround(a * i + b);
+        lut[i] = static_cast<uint8_t>(v < 0.0 ? 0 : (v > 255.0 ? 255 : v));
+    }
+    for (int r = 0; r < f.height; ++r) {
+        uint8_t* row = f.y.data() + static_cast<size_t>(r) * f.strideY;
+        for (int c = 0; c < f.width; ++c) row[c] = lut[row[c]];
+    }
+}
+
 // 偶数对齐 + 边界裁剪, 保证与 VMAF 初始化尺寸严格一致
 CropRect normalizeCrop(CropRect r, int w, int h) {
     r.x &= ~1;
@@ -516,6 +530,9 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
             rc2 = scaleFrame(rc2, cmpW, cmpH);
         if (dc2.width != cmpW || dc2.height != cmpH)
             dc2 = scaleFrame(dc2, cmpW, cmpH);
+        // 云机播放渲染仿射补偿 (对 ref 正向变换, 与 dist 同一参考系)
+        if (cfg.refAffineA != 1.0 || cfg.refAffineB != 0.0)
+            applyRefAffineY(rc2, cfg.refAffineA, cfg.refAffineB);
 
         // PSNR 与喂给 VMAF 的帧完全一致 (裁剪 + 统一比较分辨率之后)
         const PsnrResult pr = computePsnr(rc2, dc2);

@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
     if (argc < 3) {
         fprintf(stderr,
                 "用法: %s <ref视频> <dist视频或截图文件夹> [model路径] "
-                "[--export-json 文件] [--export-csv 文件]\n",
+                "[--export-json 文件] [--export-csv 文件] [--affine-y a,b]\n",
                 argv[0]);
         return 2;
     }
@@ -129,6 +129,16 @@ int main(int argc, char** argv) {
             exportJsonPath = argv[++i];
         } else if (a == "--export-csv" && i + 1 < argc) {
             exportCsvPath = argv[++i];
+        } else if (a == "--affine-y" && i + 1 < argc) {
+            // --affine-y 0.9251,16.42 : ref Y 正向仿射补偿 (CPH 云机播放渲染)
+            const std::string ab = argv[++i];
+            const size_t comma = ab.find(',');
+            if (comma == std::string::npos ||
+                sscanf(ab.c_str(), "%lf,%lf", &cfg.refAffineA, &cfg.refAffineB) != 2) {
+                fprintf(stderr, "--affine-y 参数格式: a,b (如 0.9251,16.42)\n");
+                return 2;
+            }
+            printf("[info] ref Y 仿射补偿: Y'=%.4f*Y+%.2f\n", cfg.refAffineA, cfg.refAffineB);
         } else {
             cfg.vmaf.modelName = a; // 位置参数: model 路径
             modelGiven = true;

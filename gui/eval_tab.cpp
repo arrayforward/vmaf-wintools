@@ -85,6 +85,14 @@ EvalTab::EvalTab(QWidget* parent) : QWidget(parent) {
     yuvSizeEdit_->setToolTip(tr("仅 .yuv 原始文件需要"));
     paramRow->addWidget(new QLabel(tr("YUV尺寸:")));
     paramRow->addWidget(yuvSizeEdit_);
+
+    cphBtn_ = new QPushButton(tr("CPH环境"));
+    cphBtn_->setCheckable(true);
+    cphBtn_->setToolTip(tr("华为云机(CPH)虚拟显示播放渲染存在非标准亮度仿射\n"
+                           "Y_screen = 0.9251*Y_video + 16.42（2026-11-11 标定）。\n"
+                           "勾选后对参考帧做正向仿射补偿，剥离云机播放渲染层，\n"
+                           "测编码器+传输的真实画质。换设备/播放器需重新标定。"));
+    paramRow->addWidget(cphBtn_);
     paramRow->addStretch();
     layout->addLayout(paramRow);
 
@@ -212,6 +220,12 @@ void EvalTab::startEval() {
                              ? modelPathEdit_->text().toStdString()
                              : modelCombo_->currentData().toString().toStdString();
     cfg.vmaf.threads = threadsSpin_->value();
+    if (cphBtn_->isChecked()) {
+        cfg.refAffineA = 0.9251;
+        cfg.refAffineB = 16.42;
+        appendLog("info", tr("CPH环境: 参考帧 Y 正向仿射补偿 Y'=0.9251*Y+16.42，"
+                             "剥离云机播放渲染层，评编码器+传输画质"));
+    }
 
     // 采样模式 (目标为截图文件夹): 图表 x 轴 = 有效样本序号; 视频模式 = 参考帧号
     samplingMode_ = QFileInfo(distEdit_->text()).isDir();

@@ -18,6 +18,12 @@ struct PipelineConfig {
     double yuvFps = 30.0;
 
     VmafConfig vmaf;
+    // 参考帧亮度仿射补偿（CPH 虚拟显示播放渲染非标准，2026-11-11 标定：
+    // 云机屏幕 Y_screen = 0.9251*Y_video + 16.42）。启用后对 ref Y 平面做正向
+    // 变换再算 PSNR/VMAF，把"云机播放渲染"层从串流指标剥离；参数设备/播放器
+    // 专属，换环境需重新标定。默认 1.0/0.0 = 不补偿。
+    double refAffineA = 1.0;
+    double refAffineB = 0.0;
     // 对齐与裁剪全自动: 两端帧号识别率 >= 80% 时按 QR 帧号精确对齐,
     // 并由 QR 外接框反推各端视频区域; 识别率不足直接报错
 };
