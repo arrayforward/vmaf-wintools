@@ -129,6 +129,8 @@ int main(int argc, char** argv) {
             exportJsonPath = argv[++i];
         } else if (a == "--export-csv" && i + 1 < argc) {
             exportCsvPath = argv[++i];
+        } else if (a == "--keep-qr") {
+            cfg.maskMarker = false; // 保留 QR 区参与评分 (默认屏蔽)
         } else if (a == "--affine-y" && i + 1 < argc) {
             // --affine-y 0.9251,16.42 : ref Y 正向仿射补偿 (CPH 云机播放渲染)
             const std::string ab = argv[++i];

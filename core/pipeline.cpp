@@ -116,6 +116,27 @@ void applyRefAffineY(Frame& f, double a, double b) {
     }
 }
 
+// QR 标记框填充中性灰 (Y/U/V=128)。qx/qy/qs 为整帧坐标系下的 QR 外接框,
+// c 为当前裁剪框, outW/outH 为输出(比较)分辨率; 外扩 8% 覆盖抗锯齿边。
+void fillMarkerRect(Frame& f, double qx, double qy, double qs,
+                    const CropRect& c, int outW, int outH) {
+    if (!f.valid() || qs <= 0) return;
+    const double sx = static_cast<double>(outW) / c.w;
+    const double sy = static_cast<double>(outH) / c.h;
+    double w = qs * sx * 1.08, h = qs * sy * 1.08;
+    double x = (qx - c.x) * sx - w * 0.04, y = (qy - c.y) * sy - h * 0.04;
+    int x0 = std::max(0, static_cast<int>(x)), y0 = std::max(0, static_cast<int>(y));
+    int x1 = std::min(f.width, static_cast<int>(x + w + 1));
+    int y1 = std::min(f.height, static_cast<int>(y + h + 1));
+    for (int r = y0; r < y1; ++r)
+        std::memset(f.y.data() + static_cast<size_t>(r) * f.strideY + x0, 128, x1 - x0);
+    const int cx0 = x0 / 2, cx1 = x1 / 2, cy0 = y0 / 2, cy1 = y1 / 2;
+    for (int r = cy0; r < cy1; ++r) {
+        std::memset(f.u.data() + static_cast<size_t>(r) * f.strideU + cx0, 128, cx1 - cx0);
+        std::memset(f.v.data() + static_cast<size_t>(r) * f.strideV + cx0, 128, cx1 - cx0);
+    }
+}
+
 // 偶数对齐 + 边界裁剪, 保证与 VMAF 初始化尺寸严格一致
 CropRect normalizeCrop(CropRect r, int w, int h) {
     r.x &= ~1;
@@ -337,6 +358,9 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
     CropRect rc = normalizeCrop(CropRect{0, 0, scanRef.width, scanRef.height}, scanRef.width,
                                 scanRef.height);
     CropRect dc = normalizeCrop(CropRect{0, 0, distW, distH}, distW, distH);
+    // 目标 QR 框(转正后坐标系, 供标记区屏蔽用)
+    double distQrX = scanDist.markerQrX, distQrY = scanDist.markerQrY,
+           distQrS = scanDist.markerQrSize;
     {
         // 目标可能是缩放/信箱化的采集帧, 反推的目标分辨率取参考视频
         // 反推结果先按最近偶数取整 (normalizeCrop 的 &~1 只会向下取, 1px 反推误差
@@ -369,6 +393,9 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
                     }
                 }
             }
+            distQrX = qx;
+            distQrY = qy;
+            distQrS = qs;
             if (videoRectFromMarker(qx, qy, qs, scanRef.width, scanRef.height, vx, vy, vw, vh)) {
                 dc = normalizeCrop(CropRect{roundEven(vx), roundEven(vy), roundEven(vw),
                                             roundEven(vh)},
@@ -427,6 +454,9 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
     if (cmpW != rc.w || cmpH != rc.h || cmpW != dc.w || cmpH != dc.h)
         log(cb, "info", "比较分辨率: " + std::to_string(cmpW) + "x" + std::to_string(cmpH) +
                             " (取两端裁剪的较小者, 较大端降采样)");
+
+    if (cfg.maskMarker && (scanRef.markerQrSize > 0 || distQrS > 0))
+        log(cb, "info", "QR 标记区屏蔽: 两端标记框填充中性灰, 仅评内容区");
 
     // ---------- 初始化 VMAF ----------
     VmafEvaluator vmaf;
@@ -533,6 +563,14 @@ void Pipeline::run(const PipelineConfig& cfg, const PipelineCallbacks& cb) {
         // 云机播放渲染仿射补偿 (对 ref 正向变换, 与 dist 同一参考系)
         if (cfg.refAffineA != 1.0 || cfg.refAffineB != 0.0)
             applyRefAffineY(rc2, cfg.refAffineA, cfg.refAffineB);
+        // QR 标记区屏蔽: 两端填中性灰, 指标只评内容区
+        if (cfg.maskMarker) {
+            if (scanRef.markerQrSize > 0)
+                fillMarkerRect(rc2, scanRef.markerQrX, scanRef.markerQrY,
+                               scanRef.markerQrSize, rc, cmpW, cmpH);
+            if (distQrS > 0)
+                fillMarkerRect(dc2, distQrX, distQrY, distQrS, dc, cmpW, cmpH);
+        }
 
         // PSNR 与喂给 VMAF 的帧完全一致 (裁剪 + 统一比较分辨率之后)
         const PsnrResult pr = computePsnr(rc2, dc2);
